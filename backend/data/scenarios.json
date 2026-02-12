@@ -3,27 +3,44 @@
     {
       "id": "urban_dusk",
       "name": "Urban Dusk",
-      "description": "Low-light urban surveillance with compression artifacts."
+      "description": "Low-light urban surveillance with compression artifacts.",
+      "clip": "clips/urban_dusk_demo.mp4",
+      "ground_truth": "annotations/urban_dusk_demo.json"
     },
     {
       "id": "forest_occlusion",
       "name": "Forest Occlusion",
-      "description": "Tree-line occlusions with intermittent line-of-sight."
+      "description": "Tree-line occlusions with intermittent line-of-sight.",
+      "clip": "clips/forest_occlusion_demo.mp4",
+      "ground_truth": "annotations/forest_occlusion_demo.json"
     },
     {
       "id": "swarm_stress",
       "name": "Swarm Stress",
-      "description": "Multiple small moving targets causing classifier confusion."
+      "description": "Multiple small moving targets causing classifier confusion.",
+      "clip": "clips/forest_occlusion_demo.mp4",
+      "ground_truth": "annotations/forest_occlusion_demo.json"
     },
     {
       "id": "foggy",
       "name": "Foggy",
-      "description": "Contrast-reduced aerial scene in dense fog conditions."
+      "description": "Contrast-reduced aerial scene in dense fog conditions.",
+      "clip": "clips/urban_dusk_demo.mp4",
+      "ground_truth": "annotations/urban_dusk_demo.json"
     },
     {
       "id": "high_speed",
       "name": "High Speed",
-      "description": "Fast-moving target stream with dropped frame constraints."
+      "description": "Fast-moving target stream with dropped frame constraints.",
+      "clip": "clips/urban_dusk_demo.mp4",
+      "ground_truth": "annotations/urban_dusk_demo.json"
+    },
+    {
+      "id": "clutter_false_positive",
+      "name": "Clutter False Positive",
+      "description": "Background clutter clip used to assess false-positive resilience.",
+      "clip": "clips/clutter_false_positive.mp4",
+      "ground_truth": "annotations/clutter_false_positive.json"
     }
   ]
 }

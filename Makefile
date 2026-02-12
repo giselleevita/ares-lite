@@ -6,7 +6,7 @@ VENV := $(BACKEND_DIR)/.venv
 PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
-.PHONY: setup dev demo backend frontend clean
+.PHONY: setup dev demo dataset backend frontend clean
 
 setup:
 	python3 -m venv $(VENV)
@@ -19,6 +19,9 @@ dev:
 
 demo:
 	./scripts/demo.sh
+
+dataset:
+	python3 scripts/generate_synthetic_dataset.py
 
 backend:
 	cd $(BACKEND_DIR) && .venv/bin/uvicorn main:app --reload --host 127.0.0.1 --port 8000

@@ -1,0 +1,26 @@
+{
+  "dataset_version": "phase2-v1",
+  "fps": 15,
+  "duration_seconds": 8,
+  "resolution": [
+    854,
+    480
+  ],
+  "assets": [
+    {
+      "scenario_id": "urban_dusk",
+      "clip": "clips/urban_dusk_demo.mp4",
+      "ground_truth": "annotations/urban_dusk_demo.json"
+    },
+    {
+      "scenario_id": "forest_occlusion",
+      "clip": "clips/forest_occlusion_demo.mp4",
+      "ground_truth": "annotations/forest_occlusion_demo.json"
+    },
+    {
+      "scenario_id": "clutter_false_positive",
+      "clip": "clips/clutter_false_positive.mp4",
+      "ground_truth": "annotations/clutter_false_positive.json"
+    }
+  ]
+}
