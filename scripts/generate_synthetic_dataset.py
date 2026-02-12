@@ -38,11 +38,11 @@ def write_json(path: Path, payload: dict[str, list[dict[str, object]]]) -> None:
 
 def generate_clip_urban_dusk() -> None:
     output = CLIPS_DIR / "urban_dusk_demo.mp4"
-    filter_graph = (
-        "drawbox=x=40+87.5*t:y=240+60*sin(PI*t/2):w=26:h=16:color=white@0.95:t=fill,"
-        "eq=gamma=0.82:brightness=-0.08:saturation=0.78,"
+    filter_complex = (
+        "[0:v][1:v]overlay=x='40+87.5*t':y='240+60*sin(PI*t/2)'[moved];"
+        "[moved]eq=gamma=0.82:brightness=-0.08:saturation=0.78,"
         "noise=alls=4:allf=t,"
-        "format=yuv420p"
+        "format=yuv420p[out]"
     )
 
     run_ffmpeg(
@@ -51,8 +51,14 @@ def generate_clip_urban_dusk() -> None:
             "lavfi",
             "-i",
             f"color=c=0x101a2a:s={WIDTH}x{HEIGHT}:r={FPS}:d={DURATION_SEC}",
-            "-vf",
-            filter_graph,
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c=white:s=26x16:r={FPS}:d={DURATION_SEC}",
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[out]",
             "-c:v",
             "libx264",
             "-preset",
@@ -78,14 +84,14 @@ def generate_clip_urban_dusk() -> None:
 
 def generate_clip_forest_occlusion() -> None:
     output = CLIPS_DIR / "forest_occlusion_demo.mp4"
-    filter_graph = (
-        "drawbox=x=80+60*t:y=300-25*t:w=22:h=14:color=white@0.92:t=fill,"
-        "drawbox=x=700-70*t:y=150+20*t:w=20:h=12:color=white@0.9:t=fill,"
-        "drawbox=x=260:y=0:w=90:h=480:color=black@0.45:t=fill,"
+    filter_complex = (
+        "[0:v][1:v]overlay=x='80+60*t':y='300-25*t'[ov1];"
+        "[ov1][2:v]overlay=x='700-70*t':y='150+20*t'[ov2];"
+        "[ov2]drawbox=x=260:y=0:w=90:h=480:color=black@0.45:t=fill,"
         "drawbox=x=520:y=0:w=70:h=480:color=black@0.35:t=fill,"
         "noise=alls=6:allf=t,"
         "eq=brightness=-0.03:contrast=0.9:saturation=0.7,"
-        "format=yuv420p"
+        "format=yuv420p[out]"
     )
 
     run_ffmpeg(
@@ -94,8 +100,18 @@ def generate_clip_forest_occlusion() -> None:
             "lavfi",
             "-i",
             f"color=c=0x1a2a18:s={WIDTH}x{HEIGHT}:r={FPS}:d={DURATION_SEC}",
-            "-vf",
-            filter_graph,
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c=white:s=22x14:r={FPS}:d={DURATION_SEC}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c=white:s=20x12:r={FPS}:d={DURATION_SEC}",
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[out]",
             "-c:v",
             "libx264",
             "-preset",
