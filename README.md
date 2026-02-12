@@ -2,15 +2,11 @@
 
 "Not a drone detector - a battlefield reliability test range that stress-tests detection systems under frontline conditions and outputs an operational readiness score + report."
 
-## Phase 1 Scope
+## Current Scope
 
-This repository currently provides the Phase 1 scaffold:
-- FastAPI backend skeleton
-- React + Vite + Tailwind frontend scaffold
-- SQLite-ready model stubs
-- `make dev` to run backend and frontend together
-- `make demo` for a canned scenario readiness output
-- Docker Compose dev skeleton
+Implemented so far:
+- **Phase 1**: full repo scaffold, backend/frontend boot, dev orchestration, canned demo output.
+- **Phase 2**: offline synthetic dataset with ground-truth annotations (2 drone-like clips + 1 clutter clip).
 
 ## Repository Layout
 
@@ -32,11 +28,15 @@ This repository currently provides the Phase 1 scaffold:
 │   ├── db
 │   │   └── models.py
 │   └── data
-│       └── scenarios.json
+│       ├── scenarios.json
+│       ├── dataset_manifest.json
+│       ├── clips/
+│       └── annotations/
 ├── frontend
 ├── scripts
 │   ├── dev.sh
-│   └── demo.sh
+│   ├── demo.sh
+│   └── generate_synthetic_dataset.py
 ├── docker
 │   └── docker-compose.yml
 ├── Makefile
@@ -50,6 +50,7 @@ This repository currently provides the Phase 1 scaffold:
 - Python 3.10+
 - Node.js + npm
 - GNU Make
+- `ffmpeg` (required to regenerate synthetic clips)
 - Optional: Docker Desktop
 
 ## Setup
@@ -87,12 +88,32 @@ Expected output:
 - `forest_occlusion readiness: 67`
 - `degradation observed under stress: yes`
 
+## Phase 2 Dataset: How to Run + Expected Output
+
+Generate or refresh dataset assets:
+
+```bash
+cd /Users/yusaf/ARES-lite
+make dataset
+```
+
+Expected output includes:
+- paths for generated clips:
+  - `backend/data/clips/urban_dusk_demo.mp4`
+  - `backend/data/clips/forest_occlusion_demo.mp4`
+  - `backend/data/clips/clutter_false_positive.mp4`
+- confirmation that annotation files were created under `backend/data/annotations`
+
+Sanity checks:
+- each clip is 854x480, 15 FPS, 8 seconds
+- annotation JSONs have frame keys `0..119`
+
 ## Available API Stubs (Phase 1)
 
 - `GET /health`
   - Response: `{ "status": "ok", "service": "ares-lite-backend" }`
 - `GET /api/scenarios`
-  - Response: `{ "scenarios": [{ "id": "...", "name": "...", "description": "..." }] }`
+  - Response: `{ "scenarios": [{ "id": "...", "name": "...", "description": "...", "clip": "...", "ground_truth": "..." }] }`
 
 ## Docker Compose (Scaffold)
 
