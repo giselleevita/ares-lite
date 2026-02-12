@@ -18,7 +18,7 @@ from pipeline.run import process_run
 
 configure_logging()
 
-app = FastAPI(title="ARES Lite Backend", version="0.2.0")
+app = FastAPI(title="ARES Lite Backend", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,6 +47,9 @@ class RunResponse(BaseModel):
     processed_at: str
     frames_processed: int
     detections_written: int
+    detector_backend: str
+    inference_seconds: float
+    fallback_reason: str | None = None
 
 
 @app.on_event("startup")
@@ -107,6 +110,9 @@ def run_scenario(payload: RunRequest, db: Session = Depends(get_db)) -> RunRespo
         processed_at=datetime.now(timezone.utc).isoformat(),
         frames_processed=result["frames_processed"],
         detections_written=result["detections_written"],
+        detector_backend=result["detector_backend"],
+        inference_seconds=result["inference_seconds"],
+        fallback_reason=result.get("fallback_reason"),
     )
 
 

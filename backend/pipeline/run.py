@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from core.settings import settings
 from db.models import Detection
 from pipeline.frames import FrameExtractionError, extract_sampled_frames
+from pipeline.inference import run_inference
 
 
 def process_run(
@@ -40,13 +41,37 @@ def process_run(
     except FrameExtractionError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    if sampled_indices:
-        db.add_all(
-            [
-                Detection(run_id=run_id, frame_idx=frame_idx, boxes_json="[]")
-                for frame_idx in sampled_indices
-            ]
+    frame_paths = sorted(frames_dir.glob("frame_*.jpg"))
+    if len(frame_paths) != len(sampled_indices):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Frame extraction mismatch: "
+                f"expected {len(sampled_indices)}, got {len(frame_paths)}"
+            ),
         )
+
+    detector_result = run_inference(frame_paths)
+    if len(detector_result.frame_boxes) != len(sampled_indices):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Detection output mismatch: "
+                f"expected {len(sampled_indices)}, got {len(detector_result.frame_boxes)}"
+            ),
+        )
+
+    detections_to_write = [
+        Detection(
+            run_id=run_id,
+            frame_idx=frame_idx,
+            boxes_json=json.dumps(frame_boxes),
+        )
+        for frame_idx, frame_boxes in zip(sampled_indices, detector_result.frame_boxes)
+    ]
+
+    if detections_to_write:
+        db.add_all(detections_to_write)
 
     run_dir.mkdir(parents=True, exist_ok=True)
     metadata = {
@@ -56,6 +81,9 @@ def process_run(
         "fps": fps,
         "frames_processed": len(sampled_indices),
         "frame_indices": sampled_indices,
+        "detector_backend": detector_result.backend,
+        "inference_seconds": detector_result.inference_seconds,
+        "fallback_reason": detector_result.fallback_reason,
     }
     (run_dir / "run_metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
@@ -63,4 +91,7 @@ def process_run(
         "frames_processed": len(sampled_indices),
         "detections_written": len(sampled_indices),
         "fps": fps,
+        "detector_backend": detector_result.backend,
+        "inference_seconds": detector_result.inference_seconds,
+        "fallback_reason": detector_result.fallback_reason,
     }

@@ -10,6 +10,11 @@ class Settings(BaseSettings):
     data_dir: Path = Path(__file__).resolve().parent.parent / "data"
     runs_dir: Path = data_dir / "runs"
 
+    detector_preference: str = "auto"
+    yolo_model_path: str = "yolov8n.pt"
+    yolo_conf_threshold: float = 0.25
+    detector_time_budget_sec: float = 10.0
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
