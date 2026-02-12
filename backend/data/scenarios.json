@@ -1,0 +1,29 @@
+{
+  "scenarios": [
+    {
+      "id": "urban_dusk",
+      "name": "Urban Dusk",
+      "description": "Low-light urban surveillance with compression artifacts."
+    },
+    {
+      "id": "forest_occlusion",
+      "name": "Forest Occlusion",
+      "description": "Tree-line occlusions with intermittent line-of-sight."
+    },
+    {
+      "id": "swarm_stress",
+      "name": "Swarm Stress",
+      "description": "Multiple small moving targets causing classifier confusion."
+    },
+    {
+      "id": "foggy",
+      "name": "Foggy",
+      "description": "Contrast-reduced aerial scene in dense fog conditions."
+    },
+    {
+      "id": "high_speed",
+      "name": "High Speed",
+      "description": "Fast-moving target stream with dropped frame constraints."
+    }
+  ]
+}
