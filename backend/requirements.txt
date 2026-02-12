@@ -4,3 +4,5 @@ pydantic-settings
 sqlalchemy
 numpy
 opencv-python-headless
+jinja2
+pytest

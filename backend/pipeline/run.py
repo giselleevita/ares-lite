@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,8 +19,10 @@ from metrics.reliability import (
     upsert_metrics,
 )
 from metrics.readiness import compute_readiness, upsert_readiness
+from pipeline.blindspots import get_reason_tags
 from pipeline.frames import FrameExtractionError, extract_sampled_frames
 from pipeline.inference import run_inference
+from reporting.report import generate_run_report
 from simulation.stressors import FrameRecord, StressedFrame, apply_stress_pipeline
 
 
@@ -151,6 +154,7 @@ def process_run(
         "video_id": scenario_snapshot["video_id"],
         "difficulty": scenario_snapshot["difficulty"],
         "detector_backend": detector_result.backend,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     annotation_rel = scenario.get("ground_truth")
@@ -191,6 +195,32 @@ def process_run(
     )
     upsert_readiness(db=db, run_id=run_id, readiness_payload=readiness_payload)
 
+    false_negative_frames = reliability_payload.get("false_negative_frames", {}).get("frames", [])
+    blindspots: list[dict[str, Any]] = []
+    for frame_idx in false_negative_frames:
+        idx = int(frame_idx)
+        reason_tags = get_reason_tags(
+            frame_idx=idx,
+            gt_boxes=ground_truth_by_frame.get(idx, []),
+            stressors=scenario_snapshot.get("stressors", []),
+        )
+        blindspots.append({"frame_idx": idx, "reason_tags": reason_tags})
+
+    report_paths = generate_run_report(
+        run_id=run_id,
+        scenario_id=str(scenario.get("id")),
+        config_envelope=config_envelope,
+        detector_backend=detector_result.backend,
+        fallback_reason=detector_result.fallback_reason,
+        metrics_payload=reliability_payload,
+        engagement_payload=engagement_payload,
+        readiness_payload=readiness_payload,
+        blindspots=blindspots,
+        ground_truth_by_frame=ground_truth_by_frame,
+        detections_by_frame=detections_by_frame,
+        run_dir=run_dir,
+    )
+
     run_dir.mkdir(parents=True, exist_ok=True)
     metadata = {
         "run_id": run_id,
@@ -209,6 +239,8 @@ def process_run(
         "reliability_metrics": reliability_payload,
         "engagement": engagement_payload,
         "readiness": readiness_payload,
+        "blindspots": blindspots,
+        "report_paths": report_paths,
     }
     (run_dir / "run_metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
@@ -223,6 +255,8 @@ def process_run(
         "reliability_metrics": reliability_payload,
         "engagement": engagement_payload,
         "readiness": readiness_payload,
+        "blindspots": blindspots,
+        "report_paths": report_paths,
         "detector_backend": detector_result.backend,
         "inference_seconds": detector_result.inference_seconds,
         "fallback_reason": detector_result.fallback_reason,

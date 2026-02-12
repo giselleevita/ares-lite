@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ARES Lite — Counter-UAS Reliability Report</title>
+    <style>
+      :root {
+        --bg: #070d17;
+        --panel: #101a2a;
+        --panel-alt: #132035;
+        --text: #e8eff9;
+        --muted: #9db3ce;
+        --line: #294464;
+        --ok: #52c08d;
+        --warn: #d9b569;
+        --bad: #d16f6f;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Rajdhani", "Segoe UI", sans-serif;
+        background: radial-gradient(circle at 15% 10%, #173055 0%, var(--bg) 45%);
+        color: var(--text);
+      }
+      .wrap { max-width: 1180px; margin: 0 auto; padding: 24px; }
+      .title {
+        border: 1px solid var(--line);
+        background: color-mix(in srgb, var(--panel) 90%, black 10%);
+        padding: 18px;
+        margin-bottom: 16px;
+      }
+      h1, h2, h3 { margin: 0 0 10px 0; text-transform: uppercase; letter-spacing: 0.04em; }
+      h1 { font-size: 30px; }
+      h2 { font-size: 20px; }
+      .muted { color: var(--muted); }
+      .grid { display: grid; gap: 12px; }
+      .grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .panel {
+        border: 1px solid var(--line);
+        background: color-mix(in srgb, var(--panel-alt) 85%, black 15%);
+        padding: 14px;
+      }
+      .score {
+        font-size: 44px;
+        line-height: 1;
+        font-weight: 700;
+      }
+      .ready { color: var(--ok); }
+      .limited { color: var(--warn); }
+      .not-ready { color: var(--bad); }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        border: 1px solid var(--line);
+        padding: 8px 10px;
+        text-align: left;
+      }
+      th { background: color-mix(in srgb, var(--panel) 80%, black 20%); }
+      .blindspots {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .shot {
+        border: 1px solid var(--line);
+        background: color-mix(in srgb, var(--panel) 90%, black 10%);
+        padding: 10px;
+      }
+      .shot img {
+        width: 100%;
+        border: 1px solid var(--line);
+        background: #000;
+        margin-top: 6px;
+      }
+      .meta-row { margin: 4px 0; }
+      .footer {
+        margin-top: 14px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      @media (max-width: 900px) {
+        .grid.cols-3, .grid.cols-2, .blindspots { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <section class="title">
+        <h1>ARES Lite — Counter-UAS Reliability Report</h1>
+        <div class="meta-row muted">Run ID: {{ run_id }} | Scenario: {{ scenario_id }} | Video: {{ video_id }}</div>
+        <div class="meta-row muted">Seed: {{ seed_used }} | Detector: {{ detector_backend }} | Stress Enabled: {{ stress_enabled }}</div>
+        {% if fallback_reason %}
+        <div class="meta-row muted">Fallback: {{ fallback_reason }}</div>
+        {% endif %}
+      </section>
+
+      <section class="grid cols-3">
+        <article class="panel">
+          <h2>Readiness</h2>
+          {% set rec = readiness.recommendation %}
+          <div class="score {% if rec == 'READY' %}ready{% elif rec == 'LIMITED' %}limited{% else %}not-ready{% endif %}">
+            {{ readiness.readiness_score }}
+          </div>
+          <div>{{ rec }}</div>
+        </article>
+        <article class="panel">
+          <h2>Scenario</h2>
+          <div class="meta-row">{{ scenario_name }}</div>
+          <div class="meta-row muted">{{ scenario_description }}</div>
+          <div class="meta-row">Difficulty: {{ scenario_difficulty }}</div>
+        </article>
+        <article class="panel">
+          <h2>Stressors</h2>
+          {% if scenario_stressors %}
+          <div>{{ scenario_stressors | join(", ") }}</div>
+          {% else %}
+          <div class="muted">None</div>
+          {% endif %}
+        </article>
+      </section>
+
+      <section class="panel" style="margin-top: 12px;">
+        <h2>Reliability Metrics</h2>
+        <table>
+          <tr><th>Precision</th><td>{{ metrics.precision }}</td><th>Recall</th><td>{{ metrics.recall }}</td></tr>
+          <tr><th>Detection Delay (s)</th><td>{{ metrics.detection_delay_seconds }}</td><th>Track Stability</th><td>{{ metrics.track_stability_index }}</td></tr>
+          <tr><th>False Positive Rate (/min)</th><td>{{ metrics.false_positive_rate_per_minute }}</td><th>FN Frames</th><td>{{ metrics.false_negative_frames.count }}</td></tr>
+        </table>
+      </section>
+
+      <section class="panel" style="margin-top: 12px;">
+        <h2>Engagement Summary</h2>
+        <table>
+          <tr><th>Attempts</th><td>{{ engagement.engagement_attempts }}</td><th>Success Rate</th><td>{{ engagement.engagement_success_rate }}</td></tr>
+          <tr><th>Waste Rate</th><td>{{ engagement.waste_rate }}</td><th>Collateral Risk Events</th><td>{{ engagement.collateral_risk_events }}</td></tr>
+        </table>
+      </section>
+
+      <section class="panel" style="margin-top: 12px;">
+        <h2>Blind Spot Evidence</h2>
+        {% if blindspots %}
+        <div class="blindspots">
+          {% for item in blindspots %}
+          <article class="shot">
+            <div>Frame {{ item.frame_idx }} | Tags: {{ item.reason_tags | join(", ") }}</div>
+            <img src="{{ item.frame_data_uri }}" alt="Blind spot stressed frame {{ item.frame_idx }}" />
+            <img src="{{ item.overlay_data_uri }}" alt="Blind spot overlay {{ item.frame_idx }}" />
+          </article>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="muted">No blind spot frames were captured for this run.</div>
+        {% endif %}
+      </section>
+
+      <section class="panel" style="margin-top: 12px;">
+        <h2>Limitations</h2>
+        <ul>
+          <li>Synthetic demo clips do not represent full battlefield entropy.</li>
+          <li>CPU-only inference and capped frame budgets trade depth for demo stability.</li>
+          <li>Rule-based engagement is deterministic and should be replaced by validated policy logic for deployment.</li>
+        </ul>
+      </section>
+
+      <div class="footer">Generated by ARES Lite offline pipeline.</div>
+    </div>
+  </body>
+</html>

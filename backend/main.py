@@ -1,15 +1,13 @@
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from core.ids import new_run_id
 from core.logging import configure_logging
 from core.settings import settings
 from db.models import Engagement, Metric, Readiness, Run
@@ -20,8 +18,8 @@ from pipeline.blindspots import (
     load_ground_truth_map,
     render_overlay,
 )
-from pipeline.ingest import get_scenario_or_404, load_scenarios_payload
-from pipeline.run import process_run
+from pipeline.ingest import load_scenarios_payload
+from pipeline.orchestrator import execute_run
 
 configure_logging()
 
@@ -141,45 +139,17 @@ def list_runs(limit: int = 25, db: Session = Depends(get_db)) -> dict[str, Any]:
 
 @app.post("/api/run", response_model=RunResponse)
 def run_scenario(payload: RunRequest, db: Session = Depends(get_db)) -> RunResponse:
-    scenario = get_scenario_or_404(payload.scenario_id)
-    run_id = new_run_id()
-
-    run_record = Run(
-        id=run_id,
+    result = execute_run(
+        db=db,
         scenario_id=payload.scenario_id,
-        config_json=json.dumps({"options": payload.options.model_dump()}),
-        status="processing",
+        options=payload.options.model_dump(),
     )
-    db.add(run_record)
-    db.commit()
-
-    try:
-        result = process_run(
-            db=db,
-            run_id=run_id,
-            scenario=scenario,
-            options=payload.options.model_dump(),
-        )
-        run_record.status = "completed"
-        run_record.config_json = json.dumps(result["config_envelope"])
-        db.add(run_record)
-        db.commit()
-    except HTTPException:
-        run_record.status = "failed"
-        db.add(run_record)
-        db.commit()
-        raise
-    except Exception as exc:  # pragma: no cover
-        run_record.status = "failed"
-        db.add(run_record)
-        db.commit()
-        raise HTTPException(status_code=500, detail=f"Run failed: {exc}") from exc
 
     return RunResponse(
-        run_id=run_id,
+        run_id=result["run_id"],
         scenario_id=payload.scenario_id,
-        status=run_record.status,
-        processed_at=datetime.now(timezone.utc).isoformat(),
+        status=result["status"],
+        processed_at=result["processed_at"],
         frames_processed=result["frames_processed"],
         detections_written=result["detections_written"],
         detector_backend=result["detector_backend"],
@@ -305,3 +275,22 @@ def get_run_frame_overlay(run_id: str, frame_idx: int, db: Session = Depends(get
 
     overlay_path.write_bytes(overlay_bytes)
     return Response(content=overlay_bytes, media_type="image/png")
+
+
+@app.get("/api/runs/{run_id}/report")
+def get_run_report(run_id: str, format: str = "json", db: Session = Depends(get_db)) -> Response:
+    _load_run_or_404(db, run_id)
+    report_path = _run_dir(run_id) / "report" / "index.html"
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail="Run report not found")
+
+    latest_path = Path(__file__).resolve().parents[1] / "results" / "latest" / "report" / "index.html"
+    if format.lower() == "html":
+        return HTMLResponse(content=report_path.read_text(encoding="utf-8"))
+
+    payload = {
+        "run_id": run_id,
+        "report_path": str(report_path),
+        "latest_report_path": str(latest_path),
+    }
+    return Response(content=json.dumps(payload), media_type="application/json")

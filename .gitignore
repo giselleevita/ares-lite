@@ -25,6 +25,7 @@ logs/
 
 # Runtime artifacts
 backend/data/runs/
+results/
 
 # Coverage
 .coverage

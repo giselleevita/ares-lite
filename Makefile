@@ -6,7 +6,7 @@ VENV := $(BACKEND_DIR)/.venv
 PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
-.PHONY: setup dev demo dataset backend frontend clean
+.PHONY: setup dev demo dataset backend frontend test clean
 
 setup:
 	python3 -m venv $(VENV)
@@ -28,6 +28,9 @@ backend:
 
 frontend:
 	cd $(FRONTEND_DIR) && npm run dev -- --host 127.0.0.1 --port 5173
+
+test:
+	cd $(BACKEND_DIR) && .venv/bin/python -m pytest -q
 
 clean:
 	rm -rf $(VENV)
