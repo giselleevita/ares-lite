@@ -10,12 +10,14 @@ from sqlalchemy.orm import Session
 
 from core.settings import settings
 from db.models import Detection
+from engagement.sim import simulate_engagement, upsert_engagement
 from metrics.reliability import (
     compute_reliability_metrics,
     find_strict_baseline_metrics,
     load_ground_truth_annotations,
     upsert_metrics,
 )
+from metrics.readiness import compute_readiness, upsert_readiness
 from pipeline.frames import FrameExtractionError, extract_sampled_frames
 from pipeline.inference import run_inference
 from simulation.stressors import FrameRecord, StressedFrame, apply_stress_pipeline
@@ -174,6 +176,21 @@ def process_run(
     )
     upsert_metrics(db=db, run_id=run_id, metrics_payload=reliability_payload)
 
+    engagement_payload = simulate_engagement(
+        frame_summaries=reliability_payload.get("frame_summaries", []),
+        detections_by_frame=detections_by_frame,
+        difficulty=float(scenario_snapshot.get("difficulty", 0.5)),
+        threshold=0.55,
+    )
+    upsert_engagement(db=db, run_id=run_id, engagement_payload=engagement_payload)
+
+    readiness_payload = compute_readiness(
+        metrics_payload=reliability_payload,
+        engagement_payload=engagement_payload,
+        stress_enabled=bool(config_envelope.get("stress_enabled", False)),
+    )
+    upsert_readiness(db=db, run_id=run_id, readiness_payload=readiness_payload)
+
     run_dir.mkdir(parents=True, exist_ok=True)
     metadata = {
         "run_id": run_id,
@@ -190,6 +207,8 @@ def process_run(
         "stress": stress_meta,
         "config_envelope": config_envelope,
         "reliability_metrics": reliability_payload,
+        "engagement": engagement_payload,
+        "readiness": readiness_payload,
     }
     (run_dir / "run_metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
@@ -201,6 +220,9 @@ def process_run(
         "stress_meta": stress_meta,
         "scenario_snapshot": scenario_snapshot,
         "config_envelope": config_envelope,
+        "reliability_metrics": reliability_payload,
+        "engagement": engagement_payload,
+        "readiness": readiness_payload,
         "detector_backend": detector_result.backend,
         "inference_seconds": detector_result.inference_seconds,
         "fallback_reason": detector_result.fallback_reason,

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from core.ids import new_run_id
 from core.logging import configure_logging
 from core.settings import settings
-from db.models import Metric, Run
+from db.models import Engagement, Metric, Readiness, Run
 from db.session import get_db, init_db
 from pipeline.ingest import get_scenario_or_404, load_scenarios_payload
 from pipeline.run import process_run
@@ -142,4 +142,26 @@ def get_run_metrics(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any
     return {
         "run_id": run_id,
         "metrics": json.loads(metric_record.metrics_json),
+    }
+
+
+@app.get("/api/runs/{run_id}/engagement")
+def get_run_engagement(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    engagement_record = db.query(Engagement).filter(Engagement.run_id == run_id).first()
+    if engagement_record is None:
+        raise HTTPException(status_code=404, detail="Engagement results not found for run")
+    return {
+        "run_id": run_id,
+        "engagement": json.loads(engagement_record.engagement_json),
+    }
+
+
+@app.get("/api/runs/{run_id}/readiness")
+def get_run_readiness(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    readiness_record = db.query(Readiness).filter(Readiness.run_id == run_id).first()
+    if readiness_record is None:
+        raise HTTPException(status_code=404, detail="Readiness results not found for run")
+    return {
+        "run_id": run_id,
+        "readiness": json.loads(readiness_record.readiness_json),
     }

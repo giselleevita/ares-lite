@@ -33,3 +33,19 @@ class Metric(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), unique=True, index=True)
     metrics_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class Engagement(Base):
+    __tablename__ = "engagements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), unique=True, index=True)
+    engagement_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class Readiness(Base):
+    __tablename__ = "readiness"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), unique=True, index=True)
+    readiness_json: Mapped[str] = mapped_column(Text, default="{}")
