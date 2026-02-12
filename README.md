@@ -7,6 +7,7 @@
 Implemented so far:
 - **Phase 1**: full repo scaffold, backend/frontend boot, dev orchestration, canned demo output.
 - **Phase 2**: offline synthetic dataset with ground-truth annotations (2 drone-like clips + 1 clutter clip).
+- **Phase 3**: ingestion + frame pipeline with synchronous `/api/run` execution and SQLite persistence.
 
 ## Repository Layout
 
@@ -21,12 +22,16 @@ Implemented so far:
 │   │   ├── logging.py
 │   │   └── ids.py
 │   ├── pipeline
+│   │   ├── ingest.py
+│   │   ├── frames.py
+│   │   └── run.py
 │   ├── simulation
 │   ├── metrics
 │   ├── engagement
 │   ├── reporting
 │   ├── db
-│   │   └── models.py
+│   │   ├── models.py
+│   │   └── session.py
 │   └── data
 │       ├── scenarios.json
 │       ├── dataset_manifest.json
@@ -50,7 +55,7 @@ Implemented so far:
 - Python 3.10+
 - Node.js + npm
 - GNU Make
-- `ffmpeg` (required to regenerate synthetic clips)
+- `ffmpeg` (required for frame extraction and dataset generation)
 - Optional: Docker Desktop
 
 ## Setup
@@ -108,12 +113,61 @@ Sanity checks:
 - each clip is 854x480, 15 FPS, 8 seconds
 - annotation JSONs have frame keys `0..119`
 
-## Available API Stubs (Phase 1)
+## Phase 3 Ingestion Pipeline: How to Run + Expected Output
+
+1. Start backend:
+
+```bash
+cd /Users/yusaf/ARES-lite/backend
+.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
+2. Trigger a run:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/run \
+  -H 'Content-Type: application/json' \
+  -d '{"scenario_id":"urban_dusk","options":{"resize":640,"every_n_frames":2,"max_frames":120}}'
+```
+
+Expected response (example):
+
+```json
+{
+  "run_id": "run_ab12cd34ef56",
+  "scenario_id": "urban_dusk",
+  "status": "completed",
+  "processed_at": "2026-02-12T12:00:00+00:00",
+  "frames_processed": 60,
+  "detections_written": 60
+}
+```
+
+3. Verify run record:
+
+```bash
+curl http://127.0.0.1:8000/api/runs/<run_id>
+```
+
+Expected:
+- status `completed`
+- config matches `resize`, `every_n_frames`, `max_frames`
+- extracted frame images under `backend/data/runs/<run_id>/frames`
+- SQLite rows in `runs` and `detections`
+
+## Available API Endpoints
 
 - `GET /health`
   - Response: `{ "status": "ok", "service": "ares-lite-backend" }`
 - `GET /api/scenarios`
   - Response: `{ "scenarios": [{ "id": "...", "name": "...", "description": "...", "clip": "...", "ground_truth": "..." }] }`
+- `POST /api/run`
+  - Input:
+    - `scenario_id: string`
+    - `options: { resize: int, every_n_frames: int, max_frames: int }`
+  - Behavior: synchronous short run, writes run + detections to SQLite
+- `GET /api/runs/{run_id}`
+  - Response: run status/config snapshot from SQLite
 
 ## Docker Compose (Scaffold)
 
@@ -127,4 +181,5 @@ This is a development scaffold for backend/frontend services only.
 
 - CPU-only by design.
 - Offline-first architecture target.
-- Later phases will wire ingestion, detection, stress simulation, reliability metrics, engagement simulation, readiness scoring, blind spot explorer, and report generation.
+- If `ffmpeg` is missing, `/api/run` returns a clear error.
+- Later phases will wire detection, stress simulation, reliability metrics, engagement simulation, readiness scoring, blind spot explorer, and report generation.
