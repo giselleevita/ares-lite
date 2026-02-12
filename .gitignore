@@ -23,6 +23,9 @@ logs/
 *.sqlite
 *.sqlite3
 
+# Runtime artifacts
+backend/data/runs/
+
 # Coverage
 .coverage
 htmlcov/
