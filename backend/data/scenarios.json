@@ -5,42 +5,154 @@
       "name": "Urban Dusk",
       "description": "Low-light urban surveillance with compression artifacts.",
       "clip": "clips/urban_dusk_demo.mp4",
-      "ground_truth": "annotations/urban_dusk_demo.json"
+      "ground_truth": "annotations/urban_dusk_demo.json",
+      "video_id": "urban_dusk_demo",
+      "difficulty": 0.42,
+      "default_seed": 1337,
+      "stressors": [
+        "low_light",
+        "compression_artifacts",
+        "gaussian_noise"
+      ],
+      "params": {
+        "low_light": {
+          "gamma": 0.82,
+          "brightness_scale": 0.76
+        },
+        "compression_artifacts": {
+          "quality": 28
+        },
+        "gaussian_noise": {
+          "sigma": 7.0
+        }
+      }
     },
     {
       "id": "forest_occlusion",
       "name": "Forest Occlusion",
       "description": "Tree-line occlusions with intermittent line-of-sight.",
       "clip": "clips/forest_occlusion_demo.mp4",
-      "ground_truth": "annotations/forest_occlusion_demo.json"
+      "ground_truth": "annotations/forest_occlusion_demo.json",
+      "video_id": "forest_occlusion_demo",
+      "difficulty": 0.58,
+      "default_seed": 2112,
+      "stressors": [
+        "occlusion_rectangles",
+        "motion_blur",
+        "gaussian_noise"
+      ],
+      "params": {
+        "occlusion_rectangles": {
+          "count": 3,
+          "min_w": 32,
+          "max_w": 96,
+          "min_h": 24,
+          "max_h": 80
+        },
+        "motion_blur": {
+          "kernel_size": 9,
+          "axis": "horizontal"
+        },
+        "gaussian_noise": {
+          "sigma": 10.0
+        }
+      }
     },
     {
       "id": "swarm_stress",
       "name": "Swarm Stress",
       "description": "Multiple small moving targets causing classifier confusion.",
       "clip": "clips/forest_occlusion_demo.mp4",
-      "ground_truth": "annotations/forest_occlusion_demo.json"
+      "ground_truth": "annotations/forest_occlusion_demo.json",
+      "video_id": "forest_occlusion_demo",
+      "difficulty": 0.7,
+      "default_seed": 99,
+      "stressors": [
+        "motion_blur",
+        "compression_artifacts",
+        "gaussian_noise",
+        "frame_drop"
+      ],
+      "params": {
+        "motion_blur": {
+          "kernel_size": 11,
+          "axis": "horizontal"
+        },
+        "compression_artifacts": {
+          "quality": 20
+        },
+        "gaussian_noise": {
+          "sigma": 12.0
+        },
+        "frame_drop": {
+          "keep_every": 2
+        }
+      }
     },
     {
       "id": "foggy",
       "name": "Foggy",
       "description": "Contrast-reduced aerial scene in dense fog conditions.",
       "clip": "clips/urban_dusk_demo.mp4",
-      "ground_truth": "annotations/urban_dusk_demo.json"
+      "ground_truth": "annotations/urban_dusk_demo.json",
+      "video_id": "urban_dusk_demo",
+      "difficulty": 0.64,
+      "default_seed": 2024,
+      "stressors": [
+        "fog",
+        "low_light"
+      ],
+      "params": {
+        "fog": {
+          "contrast": 0.62,
+          "noise_std": 4.5
+        },
+        "low_light": {
+          "gamma": 0.9,
+          "brightness_scale": 0.72
+        }
+      }
     },
     {
       "id": "high_speed",
       "name": "High Speed",
       "description": "Fast-moving target stream with dropped frame constraints.",
       "clip": "clips/urban_dusk_demo.mp4",
-      "ground_truth": "annotations/urban_dusk_demo.json"
+      "ground_truth": "annotations/urban_dusk_demo.json",
+      "video_id": "urban_dusk_demo",
+      "difficulty": 0.66,
+      "default_seed": 7,
+      "stressors": [
+        "motion_blur",
+        "frame_drop"
+      ],
+      "params": {
+        "motion_blur": {
+          "kernel_size": 13,
+          "axis": "horizontal"
+        },
+        "frame_drop": {
+          "keep_every": 3
+        }
+      }
     },
     {
       "id": "clutter_false_positive",
       "name": "Clutter False Positive",
       "description": "Background clutter clip used to assess false-positive resilience.",
       "clip": "clips/clutter_false_positive.mp4",
-      "ground_truth": "annotations/clutter_false_positive.json"
+      "ground_truth": "annotations/clutter_false_positive.json",
+      "video_id": "clutter_false_positive_demo",
+      "difficulty": 0.38,
+      "default_seed": 404,
+      "stressors": [
+        "compression_artifacts"
+      ],
+      "params": {
+        "compression_artifacts": {
+          "quality": 25
+        }
+      }
     }
   ]
 }

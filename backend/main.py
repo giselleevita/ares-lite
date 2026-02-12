@@ -33,6 +33,8 @@ class RunOptions(BaseModel):
     resize: int = Field(default=640, ge=160, le=1920)
     every_n_frames: int = Field(default=2, ge=1, le=60)
     max_frames: int = Field(default=120, ge=1, le=1200)
+    seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
+    disable_stress: bool = False
 
 
 class RunRequest(BaseModel):
@@ -76,7 +78,7 @@ def run_scenario(payload: RunRequest, db: Session = Depends(get_db)) -> RunRespo
     run_record = Run(
         id=run_id,
         scenario_id=payload.scenario_id,
-        config_json=json.dumps(payload.options.model_dump()),
+        config_json=json.dumps({"options": payload.options.model_dump()}),
         status="processing",
     )
     db.add(run_record)
@@ -90,6 +92,7 @@ def run_scenario(payload: RunRequest, db: Session = Depends(get_db)) -> RunRespo
             options=payload.options.model_dump(),
         )
         run_record.status = "completed"
+        run_record.config_json = json.dumps(result["config_envelope"])
         db.add(run_record)
         db.commit()
     except HTTPException:
