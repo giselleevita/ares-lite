@@ -10,6 +10,12 @@ from sqlalchemy.orm import Session
 
 from core.settings import settings
 from db.models import Detection
+from metrics.reliability import (
+    compute_reliability_metrics,
+    find_strict_baseline_metrics,
+    load_ground_truth_annotations,
+    upsert_metrics,
+)
 from pipeline.frames import FrameExtractionError, extract_sampled_frames
 from pipeline.inference import run_inference
 from simulation.stressors import FrameRecord, StressedFrame, apply_stress_pipeline
@@ -145,6 +151,29 @@ def process_run(
         "detector_backend": detector_result.backend,
     }
 
+    annotation_rel = scenario.get("ground_truth")
+    annotation_path = Path(settings.data_dir) / annotation_rel if annotation_rel else Path("")
+    ground_truth_by_frame = load_ground_truth_annotations(annotation_path, sampled_indices)
+
+    baseline_run_id, baseline_metrics = find_strict_baseline_metrics(
+        db=db,
+        current_run_id=run_id,
+        video_id=str(config_envelope["video_id"]),
+        options=options,
+        detector_backend=detector_result.backend,
+    )
+
+    reliability_payload = compute_reliability_metrics(
+        detections_by_frame=detections_by_frame,
+        ground_truth_by_frame=ground_truth_by_frame,
+        frame_indices=sampled_indices,
+        fps=fps,
+        iou_threshold=0.3,
+        baseline_metrics=baseline_metrics,
+        baseline_run_id=baseline_run_id,
+    )
+    upsert_metrics(db=db, run_id=run_id, metrics_payload=reliability_payload)
+
     run_dir.mkdir(parents=True, exist_ok=True)
     metadata = {
         "run_id": run_id,
@@ -160,6 +189,7 @@ def process_run(
         "fallback_reason": detector_result.fallback_reason,
         "stress": stress_meta,
         "config_envelope": config_envelope,
+        "reliability_metrics": reliability_payload,
     }
     (run_dir / "run_metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 

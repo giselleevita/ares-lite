@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from core.ids import new_run_id
 from core.logging import configure_logging
 from core.settings import settings
-from db.models import Run
+from db.models import Metric, Run
 from db.session import get_db, init_db
 from pipeline.ingest import get_scenario_or_404, load_scenarios_payload
 from pipeline.run import process_run
@@ -131,4 +131,15 @@ def get_run(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
         "status": run_record.status,
         "created_at": run_record.created_at.isoformat(),
         "config": json.loads(run_record.config_json),
+    }
+
+
+@app.get("/api/runs/{run_id}/metrics")
+def get_run_metrics(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    metric_record = db.query(Metric).filter(Metric.run_id == run_id).first()
+    if metric_record is None:
+        raise HTTPException(status_code=404, detail="Metrics not found for run")
+    return {
+        "run_id": run_id,
+        "metrics": json.loads(metric_record.metrics_json),
     }
