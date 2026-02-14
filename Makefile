@@ -29,7 +29,14 @@ demo:
 	./scripts/demo.sh
 
 docker-demo:
-	docker compose -f docker/docker-compose.yml up --build
+	@DOCKER_BIN="docker"; \
+	if ! command -v docker >/dev/null 2>&1 && [ -x "/Applications/Docker.app/Contents/Resources/bin/docker" ]; then \
+		DOCKER_BIN="/Applications/Docker.app/Contents/Resources/bin/docker"; \
+	fi; \
+	if [ -x "$$(dirname $$DOCKER_BIN)/docker-credential-desktop" ]; then \
+		export PATH="$$(dirname $$DOCKER_BIN):$$PATH"; \
+	fi; \
+	"$$DOCKER_BIN" compose -f docker/docker-compose.yml up --build
 
 docker-selftest:
 	./scripts/docker_selftest.sh

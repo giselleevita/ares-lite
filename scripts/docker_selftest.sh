@@ -10,17 +10,34 @@ POLL_INTERVAL_SEC="${POLL_INTERVAL_SEC:-1}"
 
 UI_BASE="http://127.0.0.1:5173"
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "[docker-selftest] docker is not installed or not on PATH"
+# Prefer docker on PATH, but fall back to the Docker Desktop embedded binary on macOS.
+DOCKER_BIN="${DOCKER_BIN:-}"
+if [[ -z "${DOCKER_BIN}" ]]; then
+  if command -v docker >/dev/null 2>&1; then
+    DOCKER_BIN="docker"
+  elif [[ -x "/Applications/Docker.app/Contents/Resources/bin/docker" ]]; then
+    DOCKER_BIN="/Applications/Docker.app/Contents/Resources/bin/docker"
+  fi
+fi
+
+if [[ -z "${DOCKER_BIN}" ]]; then
+  echo "[docker-selftest] docker is not installed or not available (set DOCKER_BIN or install Docker Desktop)"
   exit 1
 fi
-if ! docker compose version >/dev/null 2>&1; then
+
+# If we're using Docker Desktop's embedded binary, ensure its credential helpers are on PATH.
+DOCKER_BIN_DIR="$(cd "$(dirname "$DOCKER_BIN")" && pwd)"
+if [[ -x "${DOCKER_BIN_DIR}/docker-credential-desktop" ]]; then
+  export PATH="${DOCKER_BIN_DIR}:${PATH}"
+fi
+
+if ! "${DOCKER_BIN}" compose version >/dev/null 2>&1; then
   echo "[docker-selftest] docker compose is not available (need Docker Compose v2)"
   exit 1
 fi
 
 compose() {
-  docker compose -f "$COMPOSE_FILE" "$@"
+  "${DOCKER_BIN}" compose -f "$COMPOSE_FILE" "$@"
 }
 
 cleanup() {
