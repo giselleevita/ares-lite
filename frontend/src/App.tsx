@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  createRun,
+  cancelRun,
   getHealth,
   getRun,
   getRunBlindspots,
@@ -9,6 +11,7 @@ import {
   getRunReadiness,
   getRuns,
   getScenarios,
+  type Scenario,
   type Blindspot,
   type RunSummary,
   withApiBase,
@@ -24,6 +27,11 @@ function App() {
   const [status, setStatus] = useState<Status>("degraded");
   const [serviceName, setServiceName] = useState("ares-lite-backend");
   const [scenarioCount, setScenarioCount] = useState(0);
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string>("");
+  const [runCreateError, setRunCreateError] = useState<string | null>(null);
+  const [creatingRun, setCreatingRun] = useState(false);
+
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedBlindspot, setSelectedBlindspot] = useState<Blindspot | null>(null);
@@ -44,7 +52,11 @@ function App() {
         ]);
         setStatus(health.status === "ok" ? "online" : "degraded");
         setServiceName(health.service);
+        setScenarios(scenarioPayload.scenarios);
         setScenarioCount(scenarioPayload.scenarios.length);
+        if (scenarioPayload.scenarios.length > 0) {
+          setSelectedScenarioId((current) => current || scenarioPayload.scenarios[0].id);
+        }
         setRuns(runPayload.runs);
         if (runPayload.runs.length > 0) {
           setSelectedRunId(runPayload.runs[0].id);
@@ -62,23 +74,55 @@ function App() {
       return;
     }
 
-    const loadDetails = async () => {
-      try {
-        const [run, m, e, r, b] = await Promise.all([
-          getRun(selectedRunId),
-          getRunMetrics(selectedRunId),
-          getRunEngagement(selectedRunId),
-          getRunReadiness(selectedRunId),
-          getRunBlindspots(selectedRunId),
-        ]);
+    let alive = true;
+    let intervalId: number | null = null;
 
+    const tick = async () => {
+      if (!alive) return;
+      try {
+        const [run, runPayload] = await Promise.all([getRun(selectedRunId), getRuns(50)]);
+        if (!alive) return;
+
+        setRuns(runPayload.runs);
         setRunDetail(run as unknown as Record<string, unknown>);
-        setMetrics(m.metrics);
-        setEngagement(e.engagement);
-        setReadiness(r.readiness);
-        setBlindspots(b.blindspots);
-        setSelectedBlindspot(b.blindspots[0] ?? null);
+
+        const status = String((run as unknown as { status?: unknown }).status ?? "");
+        if (status === "completed") {
+          const [m, e, r, b] = await Promise.all([
+            getRunMetrics(selectedRunId),
+            getRunEngagement(selectedRunId),
+            getRunReadiness(selectedRunId),
+            getRunBlindspots(selectedRunId),
+          ]);
+          if (!alive) return;
+          setMetrics(m.metrics);
+          setEngagement(e.engagement);
+          setReadiness(r.readiness);
+          setBlindspots(b.blindspots);
+          setSelectedBlindspot((current) => current ?? (b.blindspots[0] ?? null));
+          if (intervalId != null) {
+            window.clearInterval(intervalId);
+            intervalId = null;
+          }
+        } else if (status === "failed" || status === "cancelled") {
+          setMetrics(null);
+          setEngagement(null);
+          setReadiness(null);
+          setBlindspots([]);
+          setSelectedBlindspot(null);
+          if (intervalId != null) {
+            window.clearInterval(intervalId);
+            intervalId = null;
+          }
+        } else {
+          setMetrics(null);
+          setEngagement(null);
+          setReadiness(null);
+          setBlindspots([]);
+          setSelectedBlindspot(null);
+        }
       } catch {
+        if (!alive) return;
         setRunDetail(null);
         setMetrics(null);
         setEngagement(null);
@@ -88,8 +132,58 @@ function App() {
       }
     };
 
-    void loadDetails();
+    void tick();
+    intervalId = window.setInterval(() => void tick(), 2000);
+
+    return () => {
+      alive = false;
+      if (intervalId != null) {
+        window.clearInterval(intervalId);
+      }
+    };
   }, [selectedRunId]);
+
+  const onCreateRun = async () => {
+    if (!selectedScenarioId) return;
+    setRunCreateError(null);
+    setCreatingRun(true);
+    try {
+      const result = await createRun(selectedScenarioId);
+      setSelectedRunId(result.run_id);
+    } catch (err) {
+      setRunCreateError(err instanceof Error ? err.message : "Failed to create run");
+    } finally {
+      setCreatingRun(false);
+    }
+  };
+
+  const onRunDemo = async () => {
+    setRunCreateError(null);
+    setCreatingRun(true);
+    try {
+      const result = await createRun("demo", {
+        resize: 320,
+        every_n_frames: 1,
+        max_frames: 60,
+        seed: 12345,
+        disable_stress: false,
+      });
+      setSelectedRunId(result.run_id);
+    } catch (err) {
+      setRunCreateError(err instanceof Error ? err.message : "Failed to run demo");
+    } finally {
+      setCreatingRun(false);
+    }
+  };
+
+  const onCancelRun = async () => {
+    if (!selectedRunId) return;
+    try {
+      await cancelRun(selectedRunId);
+    } catch {
+      // Ignore; polling will reflect state.
+    }
+  };
 
   const readinessScore = toNumber(readiness?.readiness_score);
   const recommendation = String(readiness?.recommendation ?? "UNKNOWN");
@@ -103,6 +197,25 @@ function App() {
   const engagementSuccess = toNumber(engagement?.engagement_success_rate);
   const wasteRate = toNumber(engagement?.waste_rate);
   const collateralRisk = toNumber(engagement?.collateral_risk_events);
+
+  const readinessBreakdown = (readiness?.readiness_breakdown ?? null) as
+    | {
+        weighting_mode?: unknown;
+        components?: unknown;
+        top_positive_contributors?: unknown;
+        top_negative_contributors?: unknown;
+      }
+    | null;
+
+  const breakdownComponents = Array.isArray(readinessBreakdown?.components)
+    ? (readinessBreakdown?.components as Array<Record<string, unknown>>)
+    : [];
+  const topPos = Array.isArray(readinessBreakdown?.top_positive_contributors)
+    ? (readinessBreakdown?.top_positive_contributors as Array<Record<string, unknown>>)
+    : [];
+  const topNeg = Array.isArray(readinessBreakdown?.top_negative_contributors)
+    ? (readinessBreakdown?.top_negative_contributors as Array<Record<string, unknown>>)
+    : [];
 
   const selectedFrameUrl = useMemo(
     () => (selectedBlindspot ? withApiBase(selectedBlindspot.frame_url) : null),
@@ -126,6 +239,40 @@ function App() {
             <span>Scenarios: {scenarioCount}</span>
             <span>Runs: {runs.length}</span>
           </div>
+
+          <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center">
+              <label className="font-mono text-xs uppercase tracking-widest text-tactical-200">Scenario</label>
+              <select
+                value={selectedScenarioId}
+                onChange={(e) => setSelectedScenarioId(e.target.value)}
+                className="rounded border border-tactical-700 bg-tactical-900/70 px-3 py-2 text-sm text-slate-100"
+              >
+                {scenarios.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.id}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => void onCreateRun()}
+                disabled={creatingRun || !selectedScenarioId}
+                className="rounded border border-accent-amber bg-tactical-800/80 px-3 py-2 font-mono text-xs uppercase tracking-widest text-slate-100 disabled:opacity-50"
+              >
+                {creatingRun ? "Queuing..." : "Start Run"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void onRunDemo()}
+                disabled={creatingRun}
+                className="rounded border border-tactical-500 bg-tactical-800/60 px-3 py-2 font-mono text-xs uppercase tracking-widest text-slate-100 disabled:opacity-50"
+              >
+                Run Demo
+              </button>
+            </div>
+            {runCreateError && <p className="text-sm text-accent-red">{runCreateError}</p>}
+          </div>
         </header>
 
         <section className="grid gap-4 lg:grid-cols-[320px_1fr]">
@@ -147,8 +294,9 @@ function App() {
                   <p className="font-mono text-xs text-tactical-200">{run.id}</p>
                   <p className="mt-1 text-sm text-slate-100">{run.scenario_id}</p>
                   <p className="mt-1 text-xs text-slate-400">
-                    score {run.readiness_score ?? "n/a"} • {run.status}
+                    score {run.readiness_score ?? "n/a"} • {run.stage ?? run.status} {run.progress != null ? `(${run.progress}%)` : ""}
                   </p>
+                  {run.message && <p className="mt-1 text-xs text-slate-500">{run.message}</p>}
                 </button>
               ))}
             </div>
@@ -178,11 +326,91 @@ function App() {
               </article>
             </section>
 
+            {readinessBreakdown ? (
+              <section className="rounded border border-tactical-700 bg-tactical-900/60 p-4">
+                <details>
+                  <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.2em] text-tactical-200">
+                    Readiness Breakdown
+                  </summary>
+                  <p className="mt-2 text-xs text-slate-400">
+                    Weighting mode: {String(readinessBreakdown.weighting_mode ?? "n/a")}
+                  </p>
+
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <div>
+                      <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Top Positive</p>
+                      {topPos.length > 0 ? (
+                        <ul className="mt-2 space-y-1 text-sm text-slate-200">
+                          {topPos.map((item, idx) => (
+                            <li key={idx}>
+                              {String(item.name ?? "n/a")}: {toNumber(item.contribution).toFixed(2)}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-2 text-sm text-slate-400">n/a</p>
+                      )}
+                    </div>
+                    <div>
+                      <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Top Negative</p>
+                      {topNeg.length > 0 ? (
+                        <ul className="mt-2 space-y-1 text-sm text-slate-200">
+                          {topNeg.map((item, idx) => (
+                            <li key={idx}>
+                              {String(item.name ?? "n/a")}: {toNumber(item.contribution).toFixed(2)}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-2 text-sm text-slate-400">n/a</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 overflow-x-auto">
+                    <table className="w-full min-w-[720px] border-collapse text-left text-sm">
+                      <thead className="text-xs uppercase tracking-[0.2em] text-tactical-300">
+                        <tr>
+                          <th className="border-b border-tactical-700 py-2 pr-3">Component</th>
+                          <th className="border-b border-tactical-700 py-2 pr-3">Raw</th>
+                          <th className="border-b border-tactical-700 py-2 pr-3">Normalized</th>
+                          <th className="border-b border-tactical-700 py-2 pr-3">Weight</th>
+                          <th className="border-b border-tactical-700 py-2">Contribution</th>
+                        </tr>
+                      </thead>
+                      <tbody className="text-slate-200">
+                        {breakdownComponents.map((c, idx) => (
+                          <tr key={idx} className="border-b border-tactical-900/60">
+                            <td className="py-2 pr-3">{String(c.name ?? "n/a")}</td>
+                            <td className="py-2 pr-3 text-slate-400">{String(c.raw_value ?? "")}</td>
+                            <td className="py-2 pr-3">{toNumber(c.normalized_value).toFixed(2)}</td>
+                            <td className="py-2 pr-3">{toNumber(c.weight).toFixed(4)}</td>
+                            <td className="py-2">{toNumber(c.contribution).toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              </section>
+            ) : null}
+
             <section className="rounded border border-tactical-700 bg-tactical-900/60 p-4">
               <h2 className="font-tactical text-xl uppercase">Blind Spots</h2>
               <p className="mt-1 text-sm text-slate-300">
-                Run: {String(runDetail?.id ?? "n/a")} • Scenario: {String(runDetail?.scenario_id ?? "n/a")} • FNs: {blindspots.length}
+                Run: {String(runDetail?.id ?? "n/a")} • Scenario: {String(runDetail?.scenario_id ?? "n/a")} • Status: {String(runDetail?.status ?? "n/a")} • Stage: {String(runDetail?.stage ?? "n/a")} • FNs: {blindspots.length}
               </p>
+              {String(runDetail?.status ?? "") === "processing" && (
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    onClick={() => void onCancelRun()}
+                    className="rounded border border-accent-red bg-tactical-800/80 px-3 py-2 font-mono text-xs uppercase tracking-widest text-slate-100"
+                  >
+                    Cancel Run
+                  </button>
+                </div>
+              )}
 
               <div className="mt-4 grid gap-4 xl:grid-cols-[240px_1fr]">
                 <div className="max-h-[380px] space-y-2 overflow-y-auto pr-1">
