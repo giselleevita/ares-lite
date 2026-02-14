@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   createRun,
   cancelRun,
+  createBenchmark,
+  getBenchmarkSuite,
   getHealth,
   getRun,
   getRunBlindspots,
@@ -11,9 +13,13 @@ import {
   getRunReadiness,
   getRuns,
   getScenarios,
+  getStressProfiles,
+  compareRuns,
   type Scenario,
   type Blindspot,
   type RunSummary,
+  type StressProfile,
+  type BenchmarkSuite,
   withApiBase,
 } from "./lib/api";
 
@@ -42,6 +48,17 @@ function App() {
   const [readiness, setReadiness] = useState<Record<string, unknown> | null>(null);
   const [blindspots, setBlindspots] = useState<Blindspot[]>([]);
 
+  const [stressProfiles, setStressProfiles] = useState<StressProfile[]>([]);
+  const [benchmarkSuiteId, setBenchmarkSuiteId] = useState<string | null>(null);
+  const [benchmarkSuite, setBenchmarkSuite] = useState<BenchmarkSuite | null>(null);
+  const [benchmarkScenarioIds, setBenchmarkScenarioIds] = useState<string[]>([]);
+  const [benchmarkProfileIds, setBenchmarkProfileIds] = useState<string[]>(["light_noise"]);
+  const [benchmarkSeeds, setBenchmarkSeeds] = useState<string>("12345");
+
+  const [compareA, setCompareA] = useState<string>("");
+  const [compareB, setCompareB] = useState<string>("");
+  const [compareResult, setCompareResult] = useState<Record<string, unknown> | null>(null);
+
   useEffect(() => {
     const load = async () => {
       try {
@@ -61,6 +78,18 @@ function App() {
         if (runPayload.runs.length > 0) {
           setSelectedRunId(runPayload.runs[0].id);
         }
+
+        // Optional: stress profiles (benchmark mode). Failure should not break core flow.
+        try {
+          const profiles = await getStressProfiles();
+          setStressProfiles(profiles.profiles ?? []);
+        } catch {
+          setStressProfiles([]);
+        }
+
+        setBenchmarkScenarioIds((cur) =>
+          cur.length ? cur : (scenarioPayload.scenarios ?? []).slice(0, 2).map((s) => s.id),
+        );
       } catch {
         setStatus("degraded");
       }
@@ -143,6 +172,27 @@ function App() {
     };
   }, [selectedRunId]);
 
+  useEffect(() => {
+    if (!benchmarkSuiteId) return;
+    let alive = true;
+    const tick = async () => {
+      if (!alive) return;
+      try {
+        const suite = await getBenchmarkSuite(benchmarkSuiteId);
+        if (!alive) return;
+        setBenchmarkSuite(suite);
+      } catch {
+        // ignore
+      }
+    };
+    void tick();
+    const id = window.setInterval(() => void tick(), 1500);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, [benchmarkSuiteId]);
+
   const onCreateRun = async () => {
     if (!selectedScenarioId) return;
     setRunCreateError(null);
@@ -182,6 +232,48 @@ function App() {
       await cancelRun(selectedRunId);
     } catch {
       // Ignore; polling will reflect state.
+    }
+  };
+
+  const onStartBenchmark = async () => {
+    setRunCreateError(null);
+    setCreatingRun(true);
+    try {
+      const seeds = benchmarkSeeds
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((s) => Number(s))
+        .filter((n) => Number.isFinite(n) && n >= 0);
+
+      const result = await createBenchmark({
+        name: "Benchmark Suite",
+        scenario_ids: benchmarkScenarioIds,
+        stress_profile_ids: benchmarkProfileIds.length ? benchmarkProfileIds : ["light_noise"],
+        seeds: seeds.length ? seeds : [12345],
+        include_baselines: true,
+        base_options: { resize: 320, every_n_frames: 1, max_frames: 60 },
+      });
+      setBenchmarkSuiteId(result.suite_id);
+      setBenchmarkSuite(result.suite);
+    } catch (err) {
+      setRunCreateError(err instanceof Error ? err.message : "Failed to start benchmark suite");
+    } finally {
+      setCreatingRun(false);
+    }
+  };
+
+  const onCompare = async () => {
+    if (!compareA || !compareB) return;
+    setRunCreateError(null);
+    setCreatingRun(true);
+    try {
+      const result = await compareRuns(compareA, compareB);
+      setCompareResult(result as unknown as Record<string, unknown>);
+    } catch (err) {
+      setRunCreateError(err instanceof Error ? err.message : "Failed to compare runs");
+    } finally {
+      setCreatingRun(false);
     }
   };
 
@@ -303,6 +395,171 @@ function App() {
           </aside>
 
           <div className="space-y-4">
+            <section className="rounded border border-tactical-700 bg-tactical-900/60 p-4">
+              <details>
+                <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.2em] text-tactical-200">
+                  Benchmark Mode (Batch Runs)
+                </summary>
+                <p className="mt-2 text-sm text-slate-300">
+                  Run a suite: scenarios x stress profiles x seeds, using the existing DB-backed worker queue.
+                </p>
+
+                <div className="mt-4 grid gap-4 md:grid-cols-3">
+                  <div>
+                    <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Scenarios</p>
+                    <div className="mt-2 max-h-[180px] space-y-2 overflow-auto pr-1 text-sm">
+                      {scenarios.map((s) => {
+                        const checked = benchmarkScenarioIds.includes(s.id);
+                        return (
+                          <label key={s.id} className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() =>
+                                setBenchmarkScenarioIds((cur) =>
+                                  checked ? cur.filter((x) => x !== s.id) : [...cur, s.id],
+                                )
+                              }
+                            />
+                            <span>{s.id}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Stress Profiles</p>
+                    <div className="mt-2 max-h-[180px] space-y-2 overflow-auto pr-1 text-sm">
+                      {stressProfiles
+                        .filter((p) => p.id !== "none")
+                        .map((p) => {
+                          const checked = benchmarkProfileIds.includes(p.id);
+                          return (
+                            <label key={p.id} className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() =>
+                                  setBenchmarkProfileIds((cur) =>
+                                    checked ? cur.filter((x) => x !== p.id) : [...cur, p.id],
+                                  )
+                                }
+                              />
+                              <span>{p.id}</span>
+                            </label>
+                          );
+                        })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Seeds</p>
+                    <input
+                      value={benchmarkSeeds}
+                      onChange={(e) => setBenchmarkSeeds(e.target.value)}
+                      className="mt-2 w-full rounded border border-tactical-700 bg-tactical-950/40 px-3 py-2 text-sm"
+                      placeholder="12345, 1337"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void onStartBenchmark()}
+                      disabled={creatingRun}
+                      className="mt-3 w-full rounded border border-accent-amber bg-tactical-800/80 px-3 py-2 font-mono text-xs uppercase tracking-widest text-slate-100 disabled:opacity-50"
+                    >
+                      {creatingRun ? "Queuing..." : "Start Benchmark"}
+                    </button>
+                  </div>
+                </div>
+
+                {benchmarkSuite ? (
+                  <div className="mt-4 rounded border border-tactical-700 bg-tactical-950/40 p-3">
+                    <p className="text-sm text-slate-200">
+                      Suite: <span className="font-mono">{benchmarkSuite.id}</span> • Status:{" "}
+                      <span className="text-accent-amber">{benchmarkSuite.status}</span> • Progress:{" "}
+                      {benchmarkSuite.progress}%
+                    </p>
+                    <div className="mt-3 overflow-x-auto">
+                      <table className="w-full min-w-[900px] border-collapse text-left text-sm">
+                        <thead className="text-xs uppercase tracking-[0.2em] text-tactical-300">
+                          <tr>
+                            <th className="border-b border-tactical-700 py-2 pr-3">Scenario</th>
+                            <th className="border-b border-tactical-700 py-2 pr-3">Seed</th>
+                            <th className="border-b border-tactical-700 py-2 pr-3">Profile</th>
+                            <th className="border-b border-tactical-700 py-2 pr-3">Role</th>
+                            <th className="border-b border-tactical-700 py-2 pr-3">Status</th>
+                            <th className="border-b border-tactical-700 py-2 pr-3">Stage</th>
+                            <th className="border-b border-tactical-700 py-2">Run</th>
+                          </tr>
+                        </thead>
+                        <tbody className="text-slate-200">
+                          {benchmarkSuite.items.map((item) => (
+                            <tr key={item.run_id} className="border-b border-tactical-900/60">
+                              <td className="py-2 pr-3">{item.scenario_id}</td>
+                              <td className="py-2 pr-3">{item.seed ?? "n/a"}</td>
+                              <td className="py-2 pr-3">{item.stress_profile_id}</td>
+                              <td className="py-2 pr-3">{item.role}</td>
+                              <td className="py-2 pr-3">{item.status}</td>
+                              <td className="py-2 pr-3">{item.stage}</td>
+                              <td className="py-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedRunId(item.run_id)}
+                                  className="rounded border border-tactical-700 bg-tactical-900/60 px-2 py-1 font-mono text-xs"
+                                >
+                                  {item.run_id}
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-4 text-sm text-slate-400">No suite running.</p>
+                )}
+              </details>
+            </section>
+
+            <section className="rounded border border-tactical-700 bg-tactical-900/60 p-4">
+              <details>
+                <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.2em] text-tactical-200">
+                  Run Comparison
+                </summary>
+                <p className="mt-2 text-sm text-slate-300">Compare two runs (metrics + readiness deltas).</p>
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  <input
+                    value={compareA}
+                    onChange={(e) => setCompareA(e.target.value)}
+                    className="rounded border border-tactical-700 bg-tactical-950/40 px-3 py-2 text-sm"
+                    placeholder="run_id A"
+                  />
+                  <input
+                    value={compareB}
+                    onChange={(e) => setCompareB(e.target.value)}
+                    className="rounded border border-tactical-700 bg-tactical-950/40 px-3 py-2 text-sm"
+                    placeholder="run_id B"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void onCompare()}
+                    disabled={creatingRun}
+                    className="rounded border border-accent-amber bg-tactical-800/80 px-3 py-2 font-mono text-xs uppercase tracking-widest text-slate-100 disabled:opacity-50"
+                  >
+                    Compare
+                  </button>
+                </div>
+                {compareResult ? (
+                  <pre className="mt-4 max-h-[420px] overflow-auto rounded border border-tactical-700 bg-black/30 p-3 text-xs text-slate-200">
+                    {JSON.stringify(compareResult, null, 2)}
+                  </pre>
+                ) : (
+                  <p className="mt-4 text-sm text-slate-400">No comparison loaded.</p>
+                )}
+              </details>
+            </section>
+
             <section className="grid gap-4 md:grid-cols-3">
               <article className="rounded border border-tactical-700 bg-tactical-900/70 p-4 shadow-glow">
                 <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Readiness</p>

@@ -25,6 +25,8 @@ from pipeline.blindspots import (
 )
 from pipeline.ingest import load_scenarios_payload
 from pipeline.orchestrator import enqueue_run_request, execute_run_sync
+from benchmarking.profiles import list_stress_profiles
+from benchmarking.suite import create_benchmark_suite, suite_status_snapshot
 
 configure_logging()
 
@@ -46,6 +48,7 @@ class RunOptions(BaseModel):
     seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
     disable_stress: bool = False
     persist_stressed_frames: bool = False
+    stress_profile_id: str | None = None
 
 
 class RunRequest(BaseModel):
@@ -207,6 +210,97 @@ def get_worker() -> dict[str, Any]:
 @app.get("/api/scenarios")
 def get_scenarios() -> dict[str, Any]:
     return load_scenarios_payload()
+
+
+@app.get("/api/stress-profiles")
+def get_stress_profiles() -> dict[str, Any]:
+    return {"profiles": list_stress_profiles()}
+
+
+class BenchmarkRequest(BaseModel):
+    name: str = "Benchmark Suite"
+    scenario_ids: list[str] = Field(default_factory=list, min_length=1)
+    stress_profile_ids: list[str] = Field(default_factory=lambda: ["light_noise"], min_length=1)
+    seeds: list[int] = Field(default_factory=lambda: [12345], min_length=1)
+    include_baselines: bool = True
+    base_options: RunOptions = Field(default_factory=RunOptions)
+
+
+@app.post("/api/benchmarks")
+def create_benchmark(payload: BenchmarkRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    suite_id = create_benchmark_suite(
+        db=db,
+        name=payload.name,
+        scenario_ids=payload.scenario_ids,
+        stress_profile_ids=payload.stress_profile_ids,
+        seeds=payload.seeds,
+        base_options=payload.base_options.model_dump(),
+        include_baselines=payload.include_baselines,
+        validate_scenarios=True,
+    )
+    snapshot = suite_status_snapshot(db, suite_id)
+    return {"suite_id": suite_id, "suite": snapshot}
+
+
+@app.get("/api/benchmarks/{suite_id}")
+def get_benchmark_suite(suite_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    snapshot = suite_status_snapshot(db, suite_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Benchmark suite not found")
+    return snapshot
+
+
+@app.get("/api/compare/runs")
+def compare_runs(run_a: str, run_b: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    ra = _load_run_or_404(db, run_a)
+    rb = _load_run_or_404(db, run_b)
+
+    def _load_json(model, run_id: str, field: str) -> dict[str, Any]:
+        row = db.query(model).filter(model.run_id == run_id).first()
+        if row is None:
+            return {}
+        try:
+            return json.loads(getattr(row, field) or "{}")
+        except Exception:
+            return {}
+
+    ma = _load_json(Metric, run_a, "metrics_json")
+    mb = _load_json(Metric, run_b, "metrics_json")
+    rda = _load_json(Readiness, run_a, "readiness_json")
+    rdb = _load_json(Readiness, run_b, "readiness_json")
+
+    def _delta(key: str) -> float | None:
+        va = ma.get(key)
+        vb = mb.get(key)
+        if not isinstance(va, (int, float)) or not isinstance(vb, (int, float)):
+            return None
+        return float(vb) - float(va)
+
+    fields = [
+        "precision",
+        "recall",
+        "track_stability_index",
+        "false_positive_rate_per_minute",
+        "detection_delay_seconds",
+    ]
+    metrics_diff = {k: {"a": ma.get(k), "b": mb.get(k), "delta": _delta(k)} for k in fields}
+
+    readiness_a = rda.get("readiness_score")
+    readiness_b = rdb.get("readiness_score")
+    readiness_delta = None
+    if isinstance(readiness_a, (int, float)) and isinstance(readiness_b, (int, float)):
+        readiness_delta = float(readiness_b) - float(readiness_a)
+
+    return {
+        "run_a": {"id": ra.id, "scenario_id": ra.scenario_id, "status": ra.status, "config": _load_run_config(ra)},
+        "run_b": {"id": rb.id, "scenario_id": rb.scenario_id, "status": rb.status, "config": _load_run_config(rb)},
+        "metrics": metrics_diff,
+        "readiness": {
+            "a": rda,
+            "b": rdb,
+            "delta": readiness_delta,
+        },
+    }
 
 
 @app.get("/api/runs")

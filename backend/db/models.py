@@ -8,6 +8,35 @@ class Base(DeclarativeBase):
     pass
 
 
+class BenchmarkSuite(Base):
+    __tablename__ = "benchmark_suites"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), default="Benchmark Suite")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    status: Mapped[str] = mapped_column(String(32), default="queued")  # queued|running|completed|failed
+    message: Mapped[str] = mapped_column(String(256), default="")
+    config_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class BenchmarkItem(Base):
+    __tablename__ = "benchmark_items"
+    __table_args__ = (
+        Index("ix_benchmark_items_suite", "suite_id", "created_at"),
+        Index("ix_benchmark_items_run", "run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    suite_id: Mapped[str] = mapped_column(ForeignKey("benchmark_suites.id"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    scenario_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    seed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stress_profile_id: Mapped[str] = mapped_column(String(64), default="scenario_default")
+    role: Mapped[str] = mapped_column(String(32), default="stressed")  # baseline|stressed
+
+
 class Run(Base):
     __tablename__ = "runs"
 

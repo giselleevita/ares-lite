@@ -29,6 +29,7 @@ from pipeline.frames import FrameExtractionError, extract_sampled_frames
 from pipeline.inference import run_inference
 from reporting.report import generate_run_report
 from simulation.stressors import StressApplier, StressedFrame
+from benchmarking.profiles import get_stress_profile
 
 
 def process_run(
@@ -74,6 +75,19 @@ def process_run(
                 f"expected {len(sampled_indices)}, got {len(frame_paths)}"
             ),
         )
+
+    # Benchmark-mode stress overrides (optional).
+    stress_profile_id = str(options.get("stress_profile_id") or "scenario_default")
+    if stress_profile_id and stress_profile_id != "scenario_default":
+        profile = get_stress_profile(stress_profile_id)
+        if profile is None:
+            raise HTTPException(status_code=422, detail=f"Unknown stress_profile_id: {stress_profile_id}")
+        # "none" is treated as baseline; enforce no stressors regardless of scenario config.
+        scenario = {
+            **scenario,
+            "stressors": list(profile.get("stressors") or []),
+            "params": dict(profile.get("params") or {}),
+        }
 
     requested_seed_raw = options.get("seed")
     requested_seed = None if requested_seed_raw is None else int(requested_seed_raw)
@@ -232,6 +246,7 @@ def process_run(
         "seed_used": seed_used,
         "deterministic": deterministic,
         "stress_enabled": stress_enabled and bool(scenario_snapshot["stressors"]),
+        "stress_profile_id": stress_profile_id,
         "scenario_snapshot": scenario_snapshot,
         "video_id": scenario_snapshot["video_id"],
         "difficulty": scenario_snapshot["difficulty"],
