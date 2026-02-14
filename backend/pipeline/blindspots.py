@@ -6,6 +6,7 @@ from typing import Any
 
 import cv2
 
+from core.boxes import BoxValidationError, ImageSize, normalize_bbox_xywh
 from db.models import Detection
 
 
@@ -60,22 +61,35 @@ def get_detection_boxes(db: Any, run_id: str, frame_idx: int) -> list[dict[str, 
     return payload if isinstance(payload, list) else []
 
 
-def render_overlay(
-    frame_path: Path,
+def render_overlay_image(
+    frame: Any,
     ground_truth_boxes: list[dict[str, Any]],
     prediction_boxes: list[dict[str, Any]],
 ) -> bytes:
-    frame = cv2.imread(str(frame_path))
-    if frame is None:
-        raise RuntimeError(f"Unable to read frame: {frame_path}")
+    height, width = frame.shape[:2]
+    image_size = ImageSize(width=int(width), height=int(height))
 
     for gt in ground_truth_boxes:
-        x, y, w, h = [int(v) for v in gt.get("bbox", [0, 0, 0, 0])]
+        try:
+            x, y, w, h = normalize_bbox_xywh(
+                gt.get("bbox"),
+                context="overlay:gt.bbox",
+                image_size=image_size,
+            )
+        except BoxValidationError as exc:
+            raise RuntimeError(str(exc)) from exc
         cv2.rectangle(frame, (x, y), (x + w, y + h), (34, 197, 94), 2)
         cv2.putText(frame, "GT", (x, max(16, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (34, 197, 94), 1, cv2.LINE_AA)
 
     for pred in prediction_boxes:
-        x, y, w, h = [int(v) for v in pred.get("bbox", [0, 0, 0, 0])]
+        try:
+            x, y, w, h = normalize_bbox_xywh(
+                pred.get("bbox"),
+                context="overlay:pred.bbox",
+                image_size=image_size,
+            )
+        except BoxValidationError as exc:
+            raise RuntimeError(str(exc)) from exc
         conf = float(pred.get("confidence", 0.0))
         label = f"PRED {conf:.2f}"
         cv2.rectangle(frame, (x, y), (x + w, y + h), (239, 68, 68), 2)
@@ -85,3 +99,14 @@ def render_overlay(
     if not ok:
         raise RuntimeError("Failed to encode overlay image")
     return encoded.tobytes()
+
+
+def render_overlay(
+    frame_path: Path,
+    ground_truth_boxes: list[dict[str, Any]],
+    prediction_boxes: list[dict[str, Any]],
+) -> bytes:
+    frame = cv2.imread(str(frame_path))
+    if frame is None:
+        raise RuntimeError(f"Unable to read frame: {frame_path}")
+    return render_overlay_image(frame, ground_truth_boxes, prediction_boxes)

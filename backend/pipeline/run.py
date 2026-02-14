@@ -9,12 +9,17 @@ import cv2
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from core.boxes import BoxValidationError, normalize_prediction_boxes
+from core.cancel import CancelledRun
+from core.rng import choose_seed
 from core.settings import settings
 from db.models import Detection
+from db.runs import is_cancel_requested, touch_run
 from engagement.sim import simulate_engagement, upsert_engagement
 from metrics.reliability import (
     compute_reliability_metrics,
-    find_strict_baseline_metrics,
+    compute_baseline_key,
+    find_baseline_metrics,
     load_ground_truth_annotations,
     upsert_metrics,
 )
@@ -23,7 +28,7 @@ from pipeline.blindspots import get_reason_tags
 from pipeline.frames import FrameExtractionError, extract_sampled_frames
 from pipeline.inference import run_inference
 from reporting.report import generate_run_report
-from simulation.stressors import FrameRecord, StressedFrame, apply_stress_pipeline
+from simulation.stressors import StressApplier, StressedFrame
 
 
 def process_run(
@@ -42,6 +47,12 @@ def process_run(
 
     run_dir = Path(settings.runs_dir) / run_id
     frames_dir = run_dir / "frames"
+
+    if is_cancel_requested(db, run_id):
+        raise CancelledRun("Cancelled")
+
+    touch_run(db, run_id, stage="extracting_frames", progress=5, message="Extracting sampled frames")
+    db.commit()
 
     try:
         sampled_indices, fps = extract_sampled_frames(
@@ -64,48 +75,80 @@ def process_run(
             ),
         )
 
-    raw_frames: list[FrameRecord] = []
-    for frame_idx, frame_path in zip(sampled_indices, frame_paths):
-        image = cv2.imread(str(frame_path))
-        if image is None:
-            raise HTTPException(status_code=500, detail=f"Failed to load extracted frame: {frame_path.name}")
-        raw_frames.append(FrameRecord(frame_idx=frame_idx, image=image))
-
-    seed_used = int(options.get("seed", scenario.get("default_seed", 1337)))
+    requested_seed_raw = options.get("seed")
+    requested_seed = None if requested_seed_raw is None else int(requested_seed_raw)
+    seed_used, deterministic = choose_seed(requested_seed)
     stress_enabled = not bool(options.get("disable_stress", False))
-    if stress_enabled:
-        stressed_frames, stress_meta = apply_stress_pipeline(
-            frames=raw_frames,
-            scenario_config=scenario,
-            seed=seed_used,
-        )
-    else:
-        stressed_frames = [StressedFrame(frame_idx=frame.frame_idx, image=frame.image.copy()) for frame in raw_frames]
-        stress_meta = {
-            "seed": seed_used,
-            "stressors_applied": [],
-            "stress_enabled": False,
-            "frame_drop": {
-                "enabled": False,
-                "keep_every": 1,
-                "dropped_indices": [],
-            },
-        }
+    persist_stressed_frames = bool(options.get("persist_stressed_frames", False))
 
     stressed_dir = run_dir / "stressed"
     stressed_dir.mkdir(parents=True, exist_ok=True)
     for existing in stressed_dir.glob("frame_*.jpg"):
         existing.unlink()
 
+    if is_cancel_requested(db, run_id):
+        raise CancelledRun("Cancelled")
+
+    touch_run(db, run_id, stage="stressing_frames", progress=15, message="Applying stressors")
+    db.commit()
+
+    applier: StressApplier | None = None
+    if stress_enabled:
+        applier = StressApplier(scenario_config=scenario, seed=seed_used)
+
     inference_frame_paths: list[Path] = []
     inference_frame_indices: list[int] = []
-    for stressed in stressed_frames:
-        output_path = stressed_dir / f"frame_{stressed.frame_idx:06d}.jpg"
+
+    total = max(1, len(sampled_indices))
+    cancel_every = int(getattr(settings, "cancel_check_every_n_frames", 10) or 10)
+    cancel_every = max(1, cancel_every)
+    for sequence_idx, (frame_idx, frame_path) in enumerate(zip(sampled_indices, frame_paths)):
+        if sequence_idx % cancel_every == 0 and is_cancel_requested(db, run_id):
+            raise CancelledRun("Cancelled")
+
+        image = cv2.imread(str(frame_path))
+        if image is None:
+            raise HTTPException(status_code=500, detail=f"Failed to load extracted frame: {frame_path.name}")
+
+        if applier is not None:
+            stressed = applier.apply(frame_idx=int(frame_idx), image=image, sequence_idx=sequence_idx)
+        else:
+            stressed = StressedFrame(frame_idx=int(frame_idx), image=image.copy())
+
+        output_path = stressed_dir / f"frame_{int(frame_idx):06d}.jpg"
         if not cv2.imwrite(str(output_path), stressed.image):
             raise HTTPException(status_code=500, detail=f"Failed to write stressed frame: {output_path.name}")
         if not stressed.dropped:
             inference_frame_paths.append(output_path)
-            inference_frame_indices.append(stressed.frame_idx)
+            inference_frame_indices.append(int(frame_idx))
+
+        if sequence_idx % 20 == 0 or sequence_idx == total - 1:
+            # 15..40%
+            progress = 15 + int(((sequence_idx + 1) / total) * 25)
+            touch_run(
+                db,
+                run_id,
+                stage="stressing_frames",
+                progress=progress,
+                message=f"Prepared {sequence_idx + 1}/{total} stressed frames",
+            )
+            db.commit()
+
+    if applier is not None:
+        stress_meta = applier.meta()
+    else:
+        stress_meta = {
+            "seed": seed_used,
+            "stressors_applied": [],
+            "stress_enabled": False,
+            "frame_drop": {"enabled": False, "keep_every": 1, "dropped_indices": []},
+        }
+
+    if is_cancel_requested(db, run_id):
+        raise CancelledRun("Cancelled")
+
+    touch_run(db, run_id, stage="inference", progress=45, message="Running detector inference")
+    db.commit()
 
     detector_result = run_inference(inference_frame_paths)
     if len(detector_result.frame_boxes) != len(inference_frame_indices):
@@ -117,21 +160,52 @@ def process_run(
             ),
         )
 
+    # Normalize predictions before persisting/metrics so schema errors become clear failures.
     detections_by_frame: dict[int, list[dict[str, Any]]] = {frame_idx: [] for frame_idx in sampled_indices}
     for frame_idx, boxes in zip(inference_frame_indices, detector_result.frame_boxes):
-        detections_by_frame[frame_idx] = boxes
+        try:
+            detections_by_frame[int(frame_idx)] = normalize_prediction_boxes(boxes, context=f"pred frame {frame_idx}")
+        except BoxValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    detections_to_write = [
-        Detection(
-            run_id=run_id,
-            frame_idx=frame_idx,
-            boxes_json=json.dumps(detections_by_frame.get(frame_idx, [])),
+    if is_cancel_requested(db, run_id):
+        raise CancelledRun("Cancelled")
+
+    touch_run(db, run_id, stage="persisting", progress=70, message="Persisting detections")
+    db.commit()
+
+    # Idempotency: if a run is retried/recovered, avoid duplicating detections.
+    db.query(Detection).filter(Detection.run_id == run_id).delete()
+
+    batch: list[Detection] = []
+    for idx, frame_idx in enumerate(sampled_indices):
+        batch.append(
+            Detection(
+                run_id=run_id,
+                frame_idx=int(frame_idx),
+                boxes_json=json.dumps(detections_by_frame.get(int(frame_idx), []), ensure_ascii=True),
+            )
         )
-        for frame_idx in sampled_indices
-    ]
+        if len(batch) >= 200:
+            db.add_all(batch)
+            db.flush()
+            batch = []
+            touch_run(
+                db,
+                run_id,
+                stage="persisting",
+                progress=70 + int(((idx + 1) / max(1, len(sampled_indices))) * 5),
+                message=f"Persisted {idx + 1}/{len(sampled_indices)} frames",
+            )
+            db.commit()
 
-    if detections_to_write:
-        db.add_all(detections_to_write)
+    if batch:
+        db.add_all(batch)
+        db.flush()
+    db.commit()
+
+    if is_cancel_requested(db, run_id):
+        raise CancelledRun("Cancelled")
 
     scenario_snapshot = {
         "id": scenario.get("id"),
@@ -146,38 +220,57 @@ def process_run(
         "default_seed": scenario.get("default_seed", 1337),
     }
 
+    baseline_key = compute_baseline_key(
+        video_id=str(scenario_snapshot["video_id"]),
+        detector_backend=detector_result.backend,
+        options=options,
+    )
+
     config_envelope = {
         "options": options,
+        "requested_seed": requested_seed,
         "seed_used": seed_used,
+        "deterministic": deterministic,
         "stress_enabled": stress_enabled and bool(scenario_snapshot["stressors"]),
         "scenario_snapshot": scenario_snapshot,
         "video_id": scenario_snapshot["video_id"],
         "difficulty": scenario_snapshot["difficulty"],
         "detector_backend": detector_result.backend,
+        "baseline_key": baseline_key,
+        "persist_stressed_frames": persist_stressed_frames,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     annotation_rel = scenario.get("ground_truth")
     annotation_path = Path(settings.data_dir) / annotation_rel if annotation_rel else Path("")
-    ground_truth_by_frame = load_ground_truth_annotations(annotation_path, sampled_indices)
+    try:
+        ground_truth_by_frame = load_ground_truth_annotations(annotation_path, sampled_indices)
+    except BoxValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    baseline_run_id, baseline_metrics = find_strict_baseline_metrics(
-        db=db,
-        current_run_id=run_id,
-        video_id=str(config_envelope["video_id"]),
-        options=options,
-        detector_backend=detector_result.backend,
-    )
+    if is_cancel_requested(db, run_id):
+        raise CancelledRun("Cancelled")
 
-    reliability_payload = compute_reliability_metrics(
-        detections_by_frame=detections_by_frame,
-        ground_truth_by_frame=ground_truth_by_frame,
-        frame_indices=sampled_indices,
-        fps=fps,
-        iou_threshold=0.3,
-        baseline_metrics=baseline_metrics,
-        baseline_run_id=baseline_run_id,
-    )
+    touch_run(db, run_id, stage="metrics", progress=80, message="Computing reliability metrics")
+    db.commit()
+
+    baseline_run_id, baseline_metrics = find_baseline_metrics(db=db, current_run_id=run_id, baseline_key=baseline_key)
+    baseline_missing = baseline_run_id is None or baseline_metrics is None
+
+    try:
+        reliability_payload = compute_reliability_metrics(
+            detections_by_frame=detections_by_frame,
+            ground_truth_by_frame=ground_truth_by_frame,
+            frame_indices=sampled_indices,
+            fps=fps,
+            iou_threshold=0.3,
+            baseline_metrics=baseline_metrics,
+            baseline_run_id=baseline_run_id,
+            baseline_missing=baseline_missing,
+            baseline_key=baseline_key,
+        )
+    except BoxValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     upsert_metrics(db=db, run_id=run_id, metrics_payload=reliability_payload)
 
     engagement_payload = simulate_engagement(
@@ -195,6 +288,11 @@ def process_run(
     )
     upsert_readiness(db=db, run_id=run_id, readiness_payload=readiness_payload)
 
+    db.commit()
+
+    if is_cancel_requested(db, run_id):
+        raise CancelledRun("Cancelled")
+
     false_negative_frames = reliability_payload.get("false_negative_frames", {}).get("frames", [])
     blindspots: list[dict[str, Any]] = []
     for frame_idx in false_negative_frames:
@@ -205,6 +303,12 @@ def process_run(
             stressors=scenario_snapshot.get("stressors", []),
         )
         blindspots.append({"frame_idx": idx, "reason_tags": reason_tags})
+
+    touch_run(db, run_id, stage="reporting", progress=95, message="Generating report")
+    db.commit()
+
+    if is_cancel_requested(db, run_id):
+        raise CancelledRun("Cancelled")
 
     report_paths = generate_run_report(
         run_id=run_id,
@@ -220,6 +324,16 @@ def process_run(
         detections_by_frame=detections_by_frame,
         run_dir=run_dir,
     )
+
+    # If callers don't want stressed frames persisted, remove them after report generation.
+    if not persist_stressed_frames:
+        stressed_dir = run_dir / "stressed"
+        for existing in stressed_dir.glob("frame_*.jpg"):
+            try:
+                existing.unlink()
+            except Exception:
+                # Best-effort cleanup only.
+                pass
 
     run_dir.mkdir(parents=True, exist_ok=True)
     metadata = {
@@ -237,6 +351,8 @@ def process_run(
         "stress": stress_meta,
         "config_envelope": config_envelope,
         "reliability_metrics": reliability_payload,
+        "baseline_key": baseline_key,
+        "baseline_matched_run_id": baseline_run_id,
         "engagement": engagement_payload,
         "readiness": readiness_payload,
         "blindspots": blindspots,

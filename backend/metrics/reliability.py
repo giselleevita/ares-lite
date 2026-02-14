@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from db.models import Metric, Run
+from core.boxes import BoxValidationError, normalize_bbox_xywh, normalize_ground_truth_boxes, normalize_prediction_boxes
 
 
 def iou(box_a: list[float], box_b: list[float]) -> float:
@@ -40,11 +41,18 @@ def _match_frame(
     ground_truth: list[dict[str, Any]],
     iou_threshold: float,
 ) -> dict[str, Any]:
+    # Normalize/validate boxes up-front so metric computation doesn't crash with cryptic errors.
+    try:
+        predictions_norm = normalize_prediction_boxes(predictions, context="metrics:predictions")
+        ground_truth_norm = normalize_ground_truth_boxes(ground_truth, context="metrics:ground_truth")
+    except BoxValidationError as exc:
+        raise BoxValidationError(f"Invalid boxes while computing metrics: {exc}") from exc
+
     candidate_pairs: list[tuple[float, int, int]] = []
-    for pred_idx, pred in enumerate(predictions):
-        pred_bbox = pred.get("bbox", [])
-        for gt_idx, gt in enumerate(ground_truth):
-            gt_bbox = gt.get("bbox", [])
+    for pred_idx, pred in enumerate(predictions_norm):
+        pred_bbox = normalize_bbox_xywh(pred.get("bbox"), context=f"metrics:pred[{pred_idx}].bbox")
+        for gt_idx, gt in enumerate(ground_truth_norm):
+            gt_bbox = normalize_bbox_xywh(gt.get("bbox"), context=f"metrics:gt[{gt_idx}].bbox")
             score = iou(pred_bbox, gt_bbox)
             if score >= iou_threshold:
                 candidate_pairs.append((score, pred_idx, gt_idx))
@@ -83,6 +91,8 @@ def compute_reliability_metrics(
     iou_threshold: float = 0.3,
     baseline_metrics: dict[str, Any] | None = None,
     baseline_run_id: str | None = None,
+    baseline_missing: bool = False,
+    baseline_key: str | None = None,
 ) -> dict[str, Any]:
     total_tp = 0
     total_fp = 0
@@ -96,7 +106,10 @@ def compute_reliability_metrics(
     for frame_idx in frame_indices:
         gt_boxes = ground_truth_by_frame.get(frame_idx, [])
         pred_boxes = detections_by_frame.get(frame_idx, [])
-        frame_match = _match_frame(pred_boxes, gt_boxes, iou_threshold=iou_threshold)
+        try:
+            frame_match = _match_frame(pred_boxes, gt_boxes, iou_threshold=iou_threshold)
+        except BoxValidationError as exc:
+            raise BoxValidationError(f"frame_idx={frame_idx}: {exc}") from exc
 
         total_tp += frame_match["tp"]
         total_fp += frame_match["fp"]
@@ -168,6 +181,9 @@ def compute_reliability_metrics(
         }
 
     return {
+        "baseline_key": baseline_key,
+        "baseline_missing": bool(baseline_missing),
+        "baseline_matched_run_id": baseline_run_id,
         "iou_threshold": iou_threshold,
         "precision": round(precision, 4),
         "recall": round(recall, 4),
@@ -208,12 +224,27 @@ def _extract_options(config_payload: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def find_strict_baseline_metrics(
+def compute_baseline_key(
+    *,
+    video_id: str,
+    detector_backend: str,
+    options: dict[str, Any],
+) -> str:
+    return "|".join(
+        [
+            str(video_id),
+            str(detector_backend),
+            str(int(options.get("resize", 0))),
+            str(int(options.get("every_n_frames", 0))),
+            str(int(options.get("max_frames", 0))),
+        ]
+    )
+
+
+def find_baseline_metrics(
     db: Any,
     current_run_id: str,
-    video_id: str,
-    options: dict[str, Any],
-    detector_backend: str,
+    baseline_key: str,
 ) -> tuple[str | None, dict[str, Any] | None]:
     candidates = (
         db.query(Run)
@@ -229,23 +260,23 @@ def find_strict_baseline_metrics(
         except Exception:
             continue
 
-        candidate_video_id = str(config_payload.get("video_id", ""))
         candidate_stress_enabled = bool(config_payload.get("stress_enabled", True))
-        candidate_backend = str(config_payload.get("detector_backend", ""))
-        candidate_options = _extract_options(config_payload)
-
-        if candidate_video_id != video_id:
-            continue
         if candidate_stress_enabled:
             continue
-        if candidate_backend != detector_backend:
-            continue
 
-        if int(candidate_options.get("resize", -1)) != int(options.get("resize", -2)):
-            continue
-        if int(candidate_options.get("every_n_frames", -1)) != int(options.get("every_n_frames", -2)):
-            continue
-        if int(candidate_options.get("max_frames", -1)) != int(options.get("max_frames", -2)):
+        candidate_baseline_key = config_payload.get("baseline_key")
+        if not candidate_baseline_key:
+            # Back-compat for older runs: compute from legacy fields.
+            candidate_video_id = str(config_payload.get("video_id", ""))
+            candidate_backend = str(config_payload.get("detector_backend", ""))
+            candidate_options = _extract_options(config_payload)
+            candidate_baseline_key = compute_baseline_key(
+                video_id=candidate_video_id,
+                detector_backend=candidate_backend,
+                options=candidate_options,
+            )
+
+        if str(candidate_baseline_key) != str(baseline_key):
             continue
 
         metric_row = db.query(Metric).filter(Metric.run_id == run.id).first()
@@ -263,8 +294,16 @@ def load_ground_truth_annotations(annotation_path: Path, frame_indices: list[int
     if not annotation_path.exists():
         return {frame_idx: [] for frame_idx in frame_indices}
 
-    payload = json.loads(annotation_path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(annotation_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise BoxValidationError(f"Invalid annotation JSON: {annotation_path.name}: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise BoxValidationError(f"Invalid annotation JSON: {annotation_path.name}: expected object at top-level")
+
     ground_truth: dict[int, list[dict[str, Any]]] = {}
     for frame_idx in frame_indices:
-        ground_truth[frame_idx] = payload.get(str(frame_idx), [])
+        raw = payload.get(str(frame_idx), [])
+        ground_truth[frame_idx] = normalize_ground_truth_boxes(raw, context=f"gt frame {frame_idx}")
     return ground_truth

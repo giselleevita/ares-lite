@@ -1,7 +1,9 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import cv2
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -10,16 +12,19 @@ from sqlalchemy.orm import Session
 
 from core.logging import configure_logging
 from core.settings import settings
+from core.diagnostics import collect_health_diagnostics
 from db.models import Engagement, Metric, Readiness, Run
 from db.session import get_db, init_db
+from pipeline.job_queue import start_worker, worker_status
 from pipeline.blindspots import (
     get_detection_boxes,
     get_reason_tags,
     load_ground_truth_map,
     render_overlay,
+    render_overlay_image,
 )
 from pipeline.ingest import load_scenarios_payload
-from pipeline.orchestrator import execute_run
+from pipeline.orchestrator import enqueue_run_request, execute_run_sync
 
 configure_logging()
 
@@ -40,6 +45,7 @@ class RunOptions(BaseModel):
     max_frames: int = Field(default=120, ge=1, le=1200)
     seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
     disable_stress: bool = False
+    persist_stressed_frames: bool = False
 
 
 class RunRequest(BaseModel):
@@ -90,15 +96,112 @@ def _annotation_path_from_config(config_payload: dict[str, Any]) -> Path | None:
     return Path(settings.data_dir) / str(annotation_rel)
 
 
+def _load_run_metadata(run_id: str) -> dict[str, Any] | None:
+    meta_path = _run_dir(run_id) / "run_metadata.json"
+    if not meta_path.exists():
+        return None
+    try:
+        payload = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _reconstruct_stressed_frame_image(
+    run_id: str,
+    frame_idx: int,
+    *,
+    config_payload: dict[str, Any],
+) -> Any:
+    """Reconstruct a stressed frame in-memory from extracted frames + config.
+
+    This is used when stressed frames are not persisted to disk.
+    """
+    meta = _load_run_metadata(run_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Run metadata not found for reconstruction")
+
+    frame_indices = meta.get("frame_indices", [])
+    if not isinstance(frame_indices, list):
+        raise HTTPException(status_code=404, detail="Run metadata missing frame_indices")
+
+    try:
+        sequence_idx = frame_indices.index(int(frame_idx))
+    except Exception:
+        raise HTTPException(status_code=404, detail="Frame not part of this run") from None
+
+    frames_dir = _run_dir(run_id) / "frames"
+    extracted_path = frames_dir / f"frame_{sequence_idx + 1:06d}.jpg"
+    if not extracted_path.exists():
+        raise HTTPException(status_code=404, detail="Extracted frame not found for reconstruction")
+
+    stress_enabled = bool(config_payload.get("stress_enabled", False))
+    if not stress_enabled:
+        image = cv2.imread(str(extracted_path))
+        if image is None:
+            raise HTTPException(status_code=500, detail="Failed to load extracted frame during reconstruction")
+        return image
+
+    scenario_snapshot = config_payload.get("scenario_snapshot", {})
+    stressors = scenario_snapshot.get("stressors", [])
+    params = scenario_snapshot.get("params", {})
+    seed_used = int(config_payload.get("seed_used", 1337))
+
+    # Local import avoids backend/main.py importing numpy during module import for all requests.
+    from simulation.stressors import StressApplier  # noqa: WPS433
+
+    applier = StressApplier(scenario_config={"stressors": stressors, "params": params}, seed=seed_used)
+    stressed_image: Any | None = None
+
+    for idx in range(sequence_idx + 1):
+        path = frames_dir / f"frame_{idx + 1:06d}.jpg"
+        image = cv2.imread(str(path))
+        if image is None:
+            raise HTTPException(status_code=500, detail="Failed to load extracted frame during reconstruction")
+        stressed = applier.apply(
+            frame_idx=int(frame_indices[idx]),
+            image=image,
+            sequence_idx=idx,
+        )
+        stressed_image = stressed.image
+
+    if stressed_image is None:
+        raise HTTPException(status_code=500, detail="Reconstruction failed")
+    return stressed_image
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     Path(settings.runs_dir).mkdir(parents=True, exist_ok=True)
     init_db()
+    start_worker()
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "service": "ares-lite-backend"}
+def health() -> dict[str, Any]:
+    payload: dict[str, Any] = {"status": "ok", "service": "ares-lite-backend"}
+    try:
+        ws = worker_status()
+        payload["worker_thread_alive"] = bool(ws.get("thread_alive"))
+        queue_stats = ws.get("queue_stats") if isinstance(ws, dict) else None
+        if isinstance(queue_stats, dict):
+            payload["worker_queue_length"] = int(queue_stats.get("queued") or 0)
+        payload["worker_lock_acquired"] = bool(ws.get("lock_acquired"))
+    except Exception:
+        pass
+
+    # Optional ops-grade diagnostics (non-breaking fields).
+    try:
+        payload.update(collect_health_diagnostics())
+    except Exception:
+        pass
+    return payload
+
+
+@app.get("/api/worker")
+def get_worker() -> dict[str, Any]:
+    """Worker diagnostics for local dev/offline use."""
+    return worker_status()
 
 
 @app.get("/api/scenarios")
@@ -127,7 +230,11 @@ def list_runs(limit: int = 25, db: Session = Depends(get_db)) -> dict[str, Any]:
                 "id": run.id,
                 "scenario_id": run.scenario_id,
                 "status": run.status,
+                "stage": getattr(run, "stage", run.status),
+                "progress": getattr(run, "progress", 0),
+                "message": getattr(run, "message", ""),
                 "created_at": run.created_at.isoformat(),
+                "updated_at": getattr(run, "updated_at", run.created_at).isoformat(),
                 "detector_backend": config_payload.get("detector_backend"),
                 "stress_enabled": config_payload.get("stress_enabled"),
                 "readiness_score": readiness_score,
@@ -139,12 +246,30 @@ def list_runs(limit: int = 25, db: Session = Depends(get_db)) -> dict[str, Any]:
 
 @app.post("/api/run", response_model=RunResponse)
 def run_scenario(payload: RunRequest, db: Session = Depends(get_db)) -> RunResponse:
-    result = execute_run(
+    run_id = enqueue_run_request(
         db=db,
         scenario_id=payload.scenario_id,
         options=payload.options.model_dump(),
     )
 
+    # Backward-compatible response shape: fields are placeholders until completion.
+    return RunResponse(
+        run_id=run_id,
+        scenario_id=payload.scenario_id,
+        status="queued",
+        processed_at=datetime.now(timezone.utc).isoformat(),
+        frames_processed=0,
+        detections_written=0,
+        detector_backend="pending",
+        inference_seconds=0.0,
+        fallback_reason=None,
+    )
+
+
+@app.post("/api/run/sync", response_model=RunResponse)
+def run_scenario_sync(payload: RunRequest, db: Session = Depends(get_db)) -> RunResponse:
+    """Debug/demo endpoint that executes synchronously in the request thread."""
+    result = execute_run_sync(db=db, scenario_id=payload.scenario_id, options=payload.options.model_dump())
     return RunResponse(
         run_id=result["run_id"],
         scenario_id=payload.scenario_id,
@@ -167,7 +292,56 @@ def get_run(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
         "scenario_id": run_record.scenario_id,
         "status": run_record.status,
         "created_at": run_record.created_at.isoformat(),
+        "updated_at": getattr(run_record, "updated_at", run_record.created_at).isoformat(),
+        "queued_at": getattr(run_record, "queued_at", None).isoformat() if getattr(run_record, "queued_at", None) else None,
+        "started_at": getattr(run_record, "started_at", None).isoformat() if getattr(run_record, "started_at", None) else None,
+        "finished_at": getattr(run_record, "finished_at", None).isoformat() if getattr(run_record, "finished_at", None) else None,
+        "cancel_requested": bool(getattr(run_record, "cancel_requested", False)),
+        "cancelled_at": getattr(run_record, "cancelled_at", None).isoformat() if getattr(run_record, "cancelled_at", None) else None,
+        "stage": getattr(run_record, "stage", run_record.status),
+        "progress": getattr(run_record, "progress", 0),
+        "message": getattr(run_record, "message", ""),
+        "error_message": getattr(run_record, "error_message", ""),
         "config": json.loads(run_record.config_json),
+    }
+
+
+@app.post("/api/runs/{run_id}/cancel")
+def cancel_run(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    run_record = _load_run_or_404(db, run_id)
+
+    status = str(run_record.status)
+    if status == "queued":
+        from db.runs import mark_cancelled
+
+        mark_cancelled(db, run_id, message="Cancelled")
+        db.commit()
+    elif status == "processing":
+        from db.runs import request_cancel
+
+        request_cancel(db, run_id)
+        db.commit()
+    elif status in {"completed", "failed", "cancelled"}:
+        # Idempotent.
+        pass
+    else:
+        # Unknown status: be conservative and mark cancel requested.
+        from db.runs import request_cancel
+
+        request_cancel(db, run_id)
+        db.commit()
+
+    # Return current state snapshot.
+    run_record = _load_run_or_404(db, run_id)
+    return {
+        "id": run_record.id,
+        "scenario_id": run_record.scenario_id,
+        "status": run_record.status,
+        "stage": getattr(run_record, "stage", run_record.status),
+        "progress": getattr(run_record, "progress", 0),
+        "message": getattr(run_record, "message", ""),
+        "cancel_requested": bool(getattr(run_record, "cancel_requested", False)),
+        "cancelled_at": getattr(run_record, "cancelled_at", None).isoformat() if getattr(run_record, "cancelled_at", None) else None,
     }
 
 
@@ -237,20 +411,26 @@ def get_run_blindspots(run_id: str, db: Session = Depends(get_db)) -> dict[str, 
 
 
 @app.get("/api/runs/{run_id}/frames/{frame_idx}")
-def get_run_frame(run_id: str, frame_idx: int, db: Session = Depends(get_db)) -> FileResponse:
+def get_run_frame(run_id: str, frame_idx: int, db: Session = Depends(get_db)) -> Response:
     _load_run_or_404(db, run_id)
     frame_path = _stressed_frame_path(run_id, frame_idx)
-    if not frame_path.exists():
-        raise HTTPException(status_code=404, detail="Frame not found")
-    return FileResponse(frame_path, media_type="image/jpeg")
+    if frame_path.exists():
+        return FileResponse(frame_path, media_type="image/jpeg")
+
+    # If stressed frames were not persisted, reconstruct on demand.
+    run_record = _load_run_or_404(db, run_id)
+    config_payload = _load_run_config(run_record)
+    image = _reconstruct_stressed_frame_image(run_id, frame_idx, config_payload=config_payload)
+    ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to encode frame")
+    return Response(content=encoded.tobytes(), media_type="image/jpeg")
 
 
 @app.get("/api/runs/{run_id}/frames/{frame_idx}/overlay")
 def get_run_frame_overlay(run_id: str, frame_idx: int, db: Session = Depends(get_db)) -> Response:
     run_record = _load_run_or_404(db, run_id)
     frame_path = _stressed_frame_path(run_id, frame_idx)
-    if not frame_path.exists():
-        raise HTTPException(status_code=404, detail="Frame not found")
 
     overlay_dir = _run_dir(run_id) / "overlays"
     overlay_dir.mkdir(parents=True, exist_ok=True)
@@ -265,11 +445,20 @@ def get_run_frame_overlay(run_id: str, frame_idx: int, db: Session = Depends(get
     pred_boxes = get_detection_boxes(db=db, run_id=run_id, frame_idx=frame_idx)
 
     try:
-        overlay_bytes = render_overlay(
-            frame_path=frame_path,
-            ground_truth_boxes=gt_boxes,
-            prediction_boxes=pred_boxes,
-        )
+        if frame_path.exists():
+            overlay_bytes = render_overlay(
+                frame_path=frame_path,
+                ground_truth_boxes=gt_boxes,
+                prediction_boxes=pred_boxes,
+            )
+        else:
+            config_payload = _load_run_config(run_record)
+            image = _reconstruct_stressed_frame_image(run_id, frame_idx, config_payload=config_payload)
+            overlay_bytes = render_overlay_image(
+                image,
+                ground_truth_boxes=gt_boxes,
+                prediction_boxes=pred_boxes,
+            )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -280,17 +469,17 @@ def get_run_frame_overlay(run_id: str, frame_idx: int, db: Session = Depends(get
 @app.get("/api/runs/{run_id}/report")
 def get_run_report(run_id: str, format: str = "json", db: Session = Depends(get_db)) -> Response:
     _load_run_or_404(db, run_id)
-    report_path = _run_dir(run_id) / "report" / "index.html"
+    report_path = _run_dir(run_id) / "index.html"
     if not report_path.exists():
         raise HTTPException(status_code=404, detail="Run report not found")
 
-    latest_path = Path(__file__).resolve().parents[1] / "results" / "latest" / "report" / "index.html"
+    latest_pointer_path = Path(settings.runs_dir) / "latest.json"
     if format.lower() == "html":
         return HTMLResponse(content=report_path.read_text(encoding="utf-8"))
 
     payload = {
         "run_id": run_id,
         "report_path": str(report_path),
-        "latest_report_path": str(latest_path),
+        "latest_pointer_path": str(latest_pointer_path),
     }
     return Response(content=json.dumps(payload), media_type="application/json")

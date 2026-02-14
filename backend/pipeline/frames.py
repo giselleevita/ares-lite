@@ -10,6 +10,40 @@ class FrameExtractionError(RuntimeError):
     pass
 
 
+def _friendly_ffmpeg_error(stderr: str, clip_path: Path) -> str:
+    text = (stderr or "").strip()
+    if not text:
+        return "ffmpeg failed (no stderr output)"
+
+    lowered = text.lower()
+    clip_str = str(clip_path)
+
+    if "no such file or directory" in lowered and clip_str.lower() in lowered:
+        return f"ffmpeg failed: cannot open input clip: {clip_path}"
+    if "permission denied" in lowered and clip_str.lower() in lowered:
+        return f"ffmpeg failed: permission denied opening clip: {clip_path}"
+    if "invalid data found when processing input" in lowered:
+        return "ffmpeg failed: invalid/corrupt input or unsupported codec"
+    if "unknown decoder" in lowered or "unsupported" in lowered:
+        return "ffmpeg failed: unsupported codec/format"
+
+    # Fallback: keep the original stderr (trimmed) for debugging.
+    return f"ffmpeg failed: {text}"
+
+
+def _friendly_ffprobe_error(stderr: str, clip_path: Path) -> str:
+    text = (stderr or "").strip()
+    if not text:
+        return "ffprobe failed (no stderr output)"
+    lowered = text.lower()
+    clip_str = str(clip_path)
+    if "no such file or directory" in lowered and clip_str.lower() in lowered:
+        return f"ffprobe failed: cannot open input clip: {clip_path}"
+    if "invalid data found when processing input" in lowered:
+        return "ffprobe failed: invalid/corrupt input or unsupported codec"
+    return f"ffprobe failed: {text}"
+
+
 def _probe_video(clip_path: Path) -> tuple[int, float]:
     cmd = [
         "ffprobe",
@@ -25,7 +59,7 @@ def _probe_video(clip_path: Path) -> tuple[int, float]:
     ]
     process = subprocess.run(cmd, capture_output=True, text=True)
     if process.returncode != 0:
-        raise FrameExtractionError(f"ffprobe failed: {process.stderr.strip()}")
+        raise FrameExtractionError(_friendly_ffprobe_error(process.stderr, clip_path))
 
     payload = json.loads(process.stdout)
     streams = payload.get("streams", [])
@@ -87,7 +121,7 @@ def extract_sampled_frames(
 
     process = subprocess.run(cmd, capture_output=True, text=True)
     if process.returncode != 0:
-        raise FrameExtractionError(f"ffmpeg frame extraction failed: {process.stderr.strip()}")
+        raise FrameExtractionError(_friendly_ffmpeg_error(process.stderr, clip_path))
 
     extracted = sorted(output_dir.glob("frame_*.jpg"))
     if len(extracted) != len(sampled_frame_indices):

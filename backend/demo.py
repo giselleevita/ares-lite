@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from db.session import SessionLocal, init_db
-from pipeline.orchestrator import execute_run
+from pipeline.orchestrator import execute_run_sync
 
 
 def main() -> None:
@@ -16,12 +16,12 @@ def main() -> None:
     }
 
     with SessionLocal() as db:
-        baseline_result = execute_run(
+        baseline_result = execute_run_sync(
             db=db,
             scenario_id="urban_dusk",
             options={**common_options, "disable_stress": True},
         )
-        stressed_result = execute_run(
+        stressed_result = execute_run_sync(
             db=db,
             scenario_id="urban_dusk",
             options={**common_options, "disable_stress": False},
@@ -30,7 +30,7 @@ def main() -> None:
     readiness_score = stressed_result["readiness"].get("readiness_score", 0.0)
     recommendation = stressed_result["readiness"].get("recommendation", "UNKNOWN")
     degradation_present = bool(stressed_result["reliability_metrics"].get("degradation_delta"))
-    report_path = stressed_result["report_paths"]["latest_report_path"]
+    report_path = stressed_result["report_paths"]["run_report_path"]
 
     print(f"baseline run: {baseline_result['run_id']}")
     print(f"stressed run: {stressed_result['run_id']}")

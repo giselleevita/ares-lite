@@ -38,7 +38,8 @@ def compute_readiness(
     alert_fatigue_score = _clamp_0_100(100.0 - (fp_rate * 22.0))
     engagement_score = _clamp_0_100(success_rate * (1.0 - waste_rate) * 100.0)
 
-    robustness_score = 100.0
+    baseline_missing = bool(metrics_payload.get("baseline_missing", False))
+    robustness_score: float | None = 100.0
     degradation_delta = metrics_payload.get("degradation_delta")
     if stress_enabled:
         if degradation_delta:
@@ -53,19 +54,33 @@ def compute_readiness(
             robustness_score += stability_delta * 25.0
             robustness_score -= max(0.0, fp_delta) * 12.0
             robustness_score -= max(0.0, delay_delta) * 10.0
-            robustness_score = _clamp_0_100(robustness_score)
+            robustness_score = _clamp_0_100(float(robustness_score))
         else:
-            robustness_score = 70.0
+            # No baseline => we cannot score robustness evidence. Do not invent a value.
+            robustness_score = None
 
-    weighted_scores = {
-        "reliability": reliability_score * READINESS_WEIGHTS["reliability"],
-        "stability": stability_score * READINESS_WEIGHTS["stability"],
-        "latency": latency_score * READINESS_WEIGHTS["latency"],
-        "alert_fatigue": alert_fatigue_score * READINESS_WEIGHTS["alert_fatigue"],
-        "engagement": engagement_score * READINESS_WEIGHTS["engagement"],
-        "robustness": robustness_score * READINESS_WEIGHTS["robustness"],
+    components: dict[str, float | None] = {
+        "reliability": reliability_score,
+        "stability": stability_score,
+        "latency": latency_score,
+        "alert_fatigue": alert_fatigue_score,
+        "engagement": engagement_score,
+        "robustness": robustness_score,
     }
-    readiness_score = _clamp_0_100(sum(weighted_scores.values()))
+
+    included_weights: dict[str, float] = {}
+    weighted_scores: dict[str, float] = {}
+    for key, score in components.items():
+        if score is None:
+            continue
+        included_weights[key] = READINESS_WEIGHTS[key]
+        weighted_scores[key] = float(score) * float(READINESS_WEIGHTS[key])
+
+    denom = sum(included_weights.values()) or 1.0
+    readiness_score = _clamp_0_100(sum(weighted_scores.values()) / denom)
+    weighting_mode = "full"
+    if robustness_score is None:
+        weighting_mode = "renormalized_without_robustness"
 
     if readiness_score >= 75.0:
         recommendation = "READY"
@@ -74,10 +89,56 @@ def compute_readiness(
     else:
         recommendation = "NOT_READY"
 
+    # Explainability (additive): expose the exact effective weights and per-component contributions
+    # used to compute readiness_score. This MUST NOT change readiness_score semantics.
+    raw_values: dict[str, Any] = {
+        "reliability": {"precision": precision, "recall": recall},
+        "stability": stability,
+        "latency": {"detection_delay_seconds": delay_seconds},
+        "alert_fatigue": {"false_positive_rate_per_minute": fp_rate},
+        "engagement": {"engagement_success_rate": success_rate, "waste_rate": waste_rate},
+        "robustness": {"degradation_delta": degradation_delta},
+    }
+
+    effective_weights: dict[str, float] = {key: float(weight) / float(denom) for key, weight in included_weights.items()}
+    components_list: list[dict[str, Any]] = []
+    for name, score in components.items():
+        if score is None:
+            continue
+        eff_w = float(effective_weights.get(name, 0.0))
+        normalized_value = float(score)
+        components_list.append(
+            {
+                "name": name,
+                "raw_value": raw_values.get(name),
+                "normalized_value": normalized_value,
+                "weight": eff_w,
+                "contribution": normalized_value * eff_w,
+            }
+        )
+
+    pos = sorted(
+        ({"name": c["name"], "contribution": float(c["contribution"])} for c in components_list if c["contribution"] > 0),
+        key=lambda item: item["contribution"],
+        reverse=True,
+    )[:3]
+    neg = sorted(
+        ({"name": c["name"], "contribution": float(c["contribution"])} for c in components_list if c["contribution"] < 0),
+        key=lambda item: item["contribution"],
+    )[:3]
+
     return {
         "readiness_score": round(readiness_score, 2),
         "recommendation": recommendation,
         "weights": READINESS_WEIGHTS,
+        "weighting_mode": weighting_mode,
+        "baseline_missing": baseline_missing,
+        "readiness_breakdown": {
+            "weighting_mode": weighting_mode,
+            "components": components_list,
+            "top_positive_contributors": pos,
+            "top_negative_contributors": neg,
+        },
         "breakdown": {
             "component_scores": {
                 "reliability": round(reliability_score, 2),
@@ -85,9 +146,12 @@ def compute_readiness(
                 "latency": round(latency_score, 2),
                 "alert_fatigue": round(alert_fatigue_score, 2),
                 "engagement": round(engagement_score, 2),
-                "robustness": round(robustness_score, 2),
+                "robustness": None if robustness_score is None else round(float(robustness_score), 2),
             },
-            "weighted_contribution": {key: round(value, 2) for key, value in weighted_scores.items()},
+            "weighted_contribution": {
+                **{key: round(value, 2) for key, value in weighted_scores.items()},
+                **({"robustness": None} if robustness_score is None else {}),
+            },
         },
     }
 

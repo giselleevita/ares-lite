@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
-import shutil
+import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +84,7 @@ def generate_run_report(
         scenario_id=scenario_id,
         video_id=config_envelope.get("video_id"),
         seed_used=config_envelope.get("seed_used"),
+        config=config_envelope,
         detector_backend=detector_backend,
         fallback_reason=fallback_reason,
         stress_enabled=config_envelope.get("stress_enabled"),
@@ -95,18 +98,34 @@ def generate_run_report(
         blindspots=blindspot_previews,
     )
 
-    run_report_dir = run_dir / "report"
-    run_report_dir.mkdir(parents=True, exist_ok=True)
-    run_report_path = run_report_dir / "index.html"
+    # Per spec: report lives directly under the run directory.
+    run_report_path = run_dir / "index.html"
     run_report_path.write_text(rendered, encoding="utf-8")
 
-    repo_root = Path(__file__).resolve().parents[2]
-    latest_report_dir = repo_root / "results" / "latest" / "report"
-    latest_report_dir.mkdir(parents=True, exist_ok=True)
-    latest_report_path = latest_report_dir / "index.html"
-    shutil.copy2(run_report_path, latest_report_path)
+    # Optional convenience pointer: atomically write the latest run id + report path.
+    latest_pointer_path = run_dir.parent / "latest.json"
+    payload = {
+        "run_id": run_id,
+        "timestamp": config_envelope.get("generated_at"),
+    }
+    _atomic_write_json(latest_pointer_path, payload)
 
     return {
         "run_report_path": str(run_report_path),
-        "latest_report_path": str(latest_report_path),
+        "latest_pointer_path": str(latest_pointer_path),
     }
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(payload, ensure_ascii=True, indent=2)
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(data)
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass

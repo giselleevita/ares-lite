@@ -25,6 +25,9 @@ logs/
 
 # Runtime artifacts
 backend/data/runs/
+# Golden demo assets are generated on demand; keep the folder, ignore generated files.
+backend/data/demo/*
+!backend/data/demo/.gitkeep
 results/
 
 # Coverage

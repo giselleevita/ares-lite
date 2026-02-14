@@ -21,6 +21,68 @@ class StressedFrame:
     applied_stressors: list[str] = field(default_factory=list)
 
 
+class StressApplier:
+    def __init__(self, scenario_config: dict[str, Any], seed: int) -> None:
+        self.stressors = [str(item) for item in scenario_config.get("stressors", [])]
+        self.params = scenario_config.get("params", {}) or {}
+        self.rng = np.random.default_rng(seed)
+        self.seed = int(seed)
+
+        keep_every = int((self.params.get("frame_drop", {}) or {}).get("keep_every", 1))
+        keep_every = max(1, keep_every)
+        self.keep_every = keep_every
+        self.drop_enabled = "frame_drop" in set(self.stressors) and keep_every > 1
+
+        self._dropped_indices: list[int] = []
+
+    def apply(self, *, frame_idx: int, image: np.ndarray, sequence_idx: int) -> StressedFrame:
+        out = image.copy()
+        applied: list[str] = []
+        dropped = False
+
+        for stressor in self.stressors:
+            stresser_params = (self.params.get(stressor, {}) or {}) if isinstance(self.params, dict) else {}
+            if stressor == "low_light":
+                out = _apply_low_light(out, stresser_params)
+                applied.append(stressor)
+            elif stressor == "motion_blur":
+                out = _apply_motion_blur(out, stresser_params)
+                applied.append(stressor)
+            elif stressor == "fog":
+                out = _apply_fog(out, stresser_params, self.rng)
+                applied.append(stressor)
+            elif stressor == "gaussian_noise":
+                out = _apply_gaussian_noise(out, stresser_params, self.rng)
+                applied.append(stressor)
+            elif stressor == "occlusion_rectangles":
+                out = _apply_occlusion_rectangles(out, stresser_params, self.rng)
+                applied.append(stressor)
+            elif stressor == "compression_artifacts":
+                out = _apply_compression_artifacts(out, stresser_params)
+                applied.append(stressor)
+            elif stressor == "frame_drop":
+                if self.drop_enabled and sequence_idx % self.keep_every != 0:
+                    dropped = True
+                applied.append(stressor)
+
+        if dropped:
+            self._dropped_indices.append(int(frame_idx))
+
+        return StressedFrame(frame_idx=int(frame_idx), image=out, dropped=dropped, applied_stressors=applied)
+
+    def meta(self) -> dict[str, Any]:
+        return {
+            "seed": self.seed,
+            "stressors_applied": self.stressors,
+            "stress_enabled": bool(self.stressors),
+            "frame_drop": {
+                "enabled": self.drop_enabled,
+                "keep_every": self.keep_every,
+                "dropped_indices": self._dropped_indices,
+            },
+        }
+
+
 def _apply_low_light(image: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     gamma = float(params.get("gamma", 0.85))
     brightness_scale = float(params.get("brightness_scale", 0.8))
@@ -109,67 +171,10 @@ def apply_stress_pipeline(
     scenario_config: dict[str, Any],
     seed: int,
 ) -> tuple[list[StressedFrame], dict[str, Any]]:
-    stressors = [str(item) for item in scenario_config.get("stressors", [])]
-    params = scenario_config.get("params", {})
-    rng = np.random.default_rng(seed)
-
-    keep_every = int(params.get("frame_drop", {}).get("keep_every", 1))
-    keep_every = max(1, keep_every)
-    drop_enabled = "frame_drop" in stressors and keep_every > 1
-
+    applier = StressApplier(scenario_config=scenario_config, seed=seed)
     stressed_frames: list[StressedFrame] = []
-    dropped_indices: list[int] = []
-
     for sequence_idx, frame in enumerate(frames):
-        image = frame.image.copy()
-        applied: list[str] = []
-        dropped = False
-
-        for stressor in stressors:
-            stresser_params = params.get(stressor, {})
-            if stressor == "low_light":
-                image = _apply_low_light(image, stresser_params)
-                applied.append(stressor)
-            elif stressor == "motion_blur":
-                image = _apply_motion_blur(image, stresser_params)
-                applied.append(stressor)
-            elif stressor == "fog":
-                image = _apply_fog(image, stresser_params, rng)
-                applied.append(stressor)
-            elif stressor == "gaussian_noise":
-                image = _apply_gaussian_noise(image, stresser_params, rng)
-                applied.append(stressor)
-            elif stressor == "occlusion_rectangles":
-                image = _apply_occlusion_rectangles(image, stresser_params, rng)
-                applied.append(stressor)
-            elif stressor == "compression_artifacts":
-                image = _apply_compression_artifacts(image, stresser_params)
-                applied.append(stressor)
-            elif stressor == "frame_drop" and drop_enabled:
-                if sequence_idx % keep_every != 0:
-                    dropped = True
-                applied.append(stressor)
-
-        if dropped:
-            dropped_indices.append(frame.frame_idx)
-
         stressed_frames.append(
-            StressedFrame(
-                frame_idx=frame.frame_idx,
-                image=image,
-                dropped=dropped,
-                applied_stressors=applied,
-            )
+            applier.apply(frame_idx=frame.frame_idx, image=frame.image, sequence_idx=sequence_idx)
         )
-
-    applied_meta = {
-        "seed": seed,
-        "stressors_applied": stressors,
-        "stress_enabled": bool(stressors),
-        "frame_drop": {
-            "enabled": drop_enabled,
-            "keep_every": keep_every,
-            "dropped_indices": dropped_indices,
-        },
-    }
-    return stressed_frames, applied_meta
+    return stressed_frames, applier.meta()

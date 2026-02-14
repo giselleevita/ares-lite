@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 
 from db.session import SessionLocal, init_db
-from pipeline.orchestrator import execute_run
+from pipeline.orchestrator import execute_run_sync
 
 
 def test_pipeline_smoke_generates_report() -> None:
@@ -15,7 +15,7 @@ def test_pipeline_smoke_generates_report() -> None:
 
     init_db()
     with SessionLocal() as db:
-        result = execute_run(
+        result = execute_run_sync(
             db=db,
             scenario_id="urban_dusk",
             options={
@@ -32,10 +32,10 @@ def test_pipeline_smoke_generates_report() -> None:
     assert "engagement" in result
     assert "reliability_metrics" in result
 
-    latest_report = Path(result["report_paths"]["latest_report_path"])
-    assert latest_report.exists()
+    run_report = Path(result["report_paths"]["run_report_path"])
+    assert run_report.exists()
 
-    html = latest_report.read_text(encoding="utf-8")
+    html = run_report.read_text(encoding="utf-8")
     assert "Counter-UAS Reliability Report" in html
     assert "Readiness" in html
     assert "Reliability Metrics" in html
