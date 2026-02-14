@@ -21,7 +21,11 @@ export type RunSummary = {
   id: string;
   scenario_id: string;
   status: string;
+  stage?: string;
+  progress?: number;
+  message?: string;
   created_at: string;
+  updated_at?: string;
   detector_backend?: string | null;
   stress_enabled?: boolean | null;
   readiness_score?: number | null;
@@ -32,7 +36,29 @@ export type RunDetail = {
   scenario_id: string;
   status: string;
   created_at: string;
+  updated_at?: string | null;
+  queued_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  stage?: string;
+  progress?: number;
+  message?: string;
+  error_message?: string;
+  cancel_requested?: boolean;
+  cancelled_at?: string | null;
   config: Record<string, unknown>;
+};
+
+export type RunCreateResponse = {
+  run_id: string;
+  scenario_id: string;
+  status: string;
+  processed_at: string;
+  frames_processed: number;
+  detections_written: number;
+  detector_backend: string;
+  inference_seconds: number;
+  fallback_reason?: string | null;
 };
 
 export type MetricsResponse = {
@@ -63,14 +89,33 @@ export type BlindspotsResponse = {
   count: number;
 };
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
+const API_BASE = String(import.meta.env.VITE_API_BASE ?? "").trim();
+
+function withBase(path: string): string {
+  if (!API_BASE) return path;
+  const base = API_BASE.endsWith("/") ? API_BASE.slice(0, -1) : API_BASE;
+  const suffix = path.startsWith("/") ? path : `/${path}`;
+  return `${base}${suffix}`;
+}
 
 async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`);
+  const response = await fetch(withBase(path));
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status}`);
   }
 
+  return (await response.json()) as T;
+}
+
+async function postJson<T>(path: string, payload: unknown): Promise<T> {
+  const response = await fetch(withBase(path), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`);
+  }
   return (await response.json()) as T;
 }
 
@@ -106,9 +151,25 @@ export function getRunBlindspots(runId: string): Promise<BlindspotsResponse> {
   return getJson<BlindspotsResponse>(`/api/runs/${runId}/blindspots`);
 }
 
+export function cancelRun(runId: string): Promise<RunDetail> {
+  return postJson<RunDetail>(`/api/runs/${runId}/cancel`, {});
+}
+
+export function createRun(scenarioId: string, options?: Record<string, unknown>): Promise<RunCreateResponse> {
+  return postJson<RunCreateResponse>("/api/run", {
+    scenario_id: scenarioId,
+    options: {
+      resize: 640,
+      every_n_frames: 2,
+      max_frames: 120,
+      ...(options ?? {}),
+    },
+  });
+}
+
 export function withApiBase(path: string): string {
   if (path.startsWith("http://") || path.startsWith("https://")) {
     return path;
   }
-  return `${API_BASE}${path}`;
+  return withBase(path);
 }

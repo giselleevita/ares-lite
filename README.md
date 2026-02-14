@@ -73,6 +73,13 @@ Expected output includes:
 - Python dependencies installed from `backend/requirements.txt`
 - Frontend dependencies installed in `frontend/node_modules`
 
+Optional quick sanity check (requires `ffmpeg`):
+
+```bash
+cd /Users/yusaf/ARES-lite
+make selfcheck
+```
+
 ## Run Development Stack
 
 ```bash
@@ -84,17 +91,73 @@ Expected output includes lines similar to:
 - `Uvicorn running on http://127.0.0.1:8000`
 - `Local:   http://127.0.0.1:5173/`
 
-## Run Canned Demo
+## Doctor (Environment Check)
+
+```bash
+cd /Users/yusaf/ARES-lite
+make doctor
+```
+
+This prints a copy/paste friendly checklist for:
+- `ffmpeg` / `ffprobe`
+- data/runs write permissions
+- SQLite path + WAL mode
+- warn-only checks (Python version, disk space)
+
+## Run Demo (One Command)
 
 ```bash
 cd /Users/yusaf/ARES-lite
 make demo
 ```
 
-Expected output:
-- `urban_dusk readiness: 82`
-- `forest_occlusion readiness: 67`
-- `degradation observed under stress: yes`
+This will:
+1) run `make doctor`
+2) generate the built-in golden demo assets if missing
+3) start backend + frontend dev servers
+
+Then open `http://127.0.0.1:5173/` and click **Run Demo** (fixed seed, reproducible).
+
+## Docker Demo (Runs Anywhere)
+
+Requirements: Docker Desktop (or Docker Engine) + `docker compose`.
+
+```bash
+cd /Users/yusaf/ARES-lite
+make docker-demo
+```
+
+Then open:
+- UI: `http://127.0.0.1:5173/`
+- Backend health (proxied): `http://127.0.0.1:5173/health`
+- Backend health (direct): `http://127.0.0.1:8000/health`
+
+Notes:
+- The built-in golden demo assets are generated on demand inside the backend container and persisted via a named volume.
+- The SQLite DB is stored under the `runs` volume (`/app/backend/data/runs/ares_lite.db`).
+ - The frontend container proxies `/api/*` to the backend container so the UI can use relative API paths (no build-time localhost coupling).
+
+### Docker Selftest (End-to-End)
+
+This proves the full system works inside Docker: nginx proxy, backend worker, demo assets generation, and run completion.
+
+```bash
+cd /Users/yusaf/ARES-lite
+make docker-selftest
+```
+
+Controls:
+- `TIMEOUT_SEC=240 make docker-selftest`
+- `KEEP_VOLUMES=1 make docker-selftest` (keeps named volumes for debugging)
+
+### Offline Demo (No Servers)
+
+If you want a quick, synchronous pipeline run without starting the dev stack:
+
+```bash
+cd /Users/yusaf/ARES-lite/backend
+.venv/bin/python -m demo
+```
 
 ## Phase 2 Dataset: How to Run + Expected Output
 
@@ -133,33 +196,54 @@ curl -X POST http://127.0.0.1:8000/api/run \
   -d '{"scenario_id":"urban_dusk","options":{"resize":640,"every_n_frames":2,"max_frames":120}}'
 ```
 
-Expected response (example):
+Expected response (example): `POST /api/run` is **asynchronous** and returns immediately with a queued run.
 
 ```json
 {
   "run_id": "run_ab12cd34ef56",
   "scenario_id": "urban_dusk",
-  "status": "completed",
+  "status": "queued",
   "processed_at": "2026-02-12T12:00:00+00:00",
-  "frames_processed": 60,
-  "detections_written": 60,
-  "detector_backend": "motion",
-  "inference_seconds": 0.08,
-  "fallback_reason": "ultralytics unavailable: No module named 'ultralytics'"
+  "frames_processed": 0,
+  "detections_written": 0,
+  "detector_backend": "pending",
+  "inference_seconds": 0.0,
+  "fallback_reason": null
 }
 ```
 
-3. Verify run record:
+3. Poll run status until completion:
 
 ```bash
 curl http://127.0.0.1:8000/api/runs/<run_id>
 ```
 
 Expected:
-- status `completed`
+- status transitions `queued -> processing -> completed` (or `failed`)
+- progress fields: `stage`, `progress`, `message`
 - config matches `resize`, `every_n_frames`, `max_frames`
 - extracted frame images under `backend/data/runs/<run_id>/frames`
 - SQLite rows in `runs` and `detections`
+
+Optional: synchronous debug endpoint (blocks the request thread):
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/run/sync \
+  -H 'Content-Type: application/json' \
+  -d '{"scenario_id":"urban_dusk","options":{"resize":640,"every_n_frames":2,"max_frames":120}}'
+```
+
+## Golden Demo Scenario (Reproducible)
+
+ARES Lite exposes a built-in `demo` scenario that generates its clip + ground truth on demand under `backend/data/demo/`.
+
+Recommended demo run (fixed seed):
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/run \
+  -H 'Content-Type: application/json' \
+  -d '{"scenario_id":"demo","options":{"resize":320,"every_n_frames":1,"max_frames":60,"seed":12345}}'
+```
 
 ## Available API Endpoints
 
@@ -171,12 +255,17 @@ Expected:
   - Input:
     - `scenario_id: string`
     - `options: { resize: int, every_n_frames: int, max_frames: int }`
-  - Behavior: synchronous short run, writes run + detections to SQLite
+  - Behavior: **asynchronous** run; returns immediately with `run_id` and enqueues work
   - Detector selection:
     - tries YOLO (`ultralytics` + `yolov8n.pt`)
     - auto-falls back to motion detector on load failure/inference failure/timeout
 - `GET /api/runs/{run_id}`
-  - Response: run status/config snapshot from SQLite
+  - Response: run status + progress (`stage`, `progress`, `message`) + config snapshot from SQLite
+- `POST /api/runs/{run_id}/cancel`
+  - Behavior:
+    - if `queued`: cancels immediately (`status=cancelled`)
+    - if `processing`: sets `cancel_requested=true`; run stops at safe checkpoints
+    - idempotent for terminal runs (`completed/failed/cancelled`)
 
 ## Docker Compose (Scaffold)
 
@@ -190,6 +279,7 @@ This is a development scaffold for backend/frontend services only.
 
 - CPU-only by design.
 - Offline-first architecture target.
-- If `ffmpeg` is missing, `/api/run` returns a clear error.
+- If `ffmpeg` is missing, runs will fail with a clear `error_message` visible via `GET /api/runs/{run_id}`.
 - If `ultralytics` is missing, runs continue via motion fallback.
+- Runs are queued in SQLite (the `runs` table) and a local background worker thread claims and executes queued runs.
 - Later phases will wire stress simulation, reliability metrics, engagement simulation, readiness scoring, blind spot explorer, and report generation.
