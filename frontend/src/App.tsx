@@ -4,7 +4,7 @@ import {
   createRun,
   cancelRun,
   createBenchmark,
-  getBenchmarkSuite,
+  getBenchmarkBatch,
   getHealth,
   getRun,
   getRunBlindspots,
@@ -19,7 +19,7 @@ import {
   type Blindspot,
   type RunSummary,
   type StressProfile,
-  type BenchmarkSuite,
+  type BenchmarkBatch,
   withApiBase,
 } from "./lib/api";
 
@@ -50,9 +50,9 @@ function App() {
 
   const [stressProfiles, setStressProfiles] = useState<StressProfile[]>([]);
   const [benchmarkSuiteId, setBenchmarkSuiteId] = useState<string | null>(null);
-  const [benchmarkSuite, setBenchmarkSuite] = useState<BenchmarkSuite | null>(null);
+  const [benchmarkSuite, setBenchmarkSuite] = useState<BenchmarkBatch | null>(null);
   const [benchmarkScenarioIds, setBenchmarkScenarioIds] = useState<string[]>([]);
-  const [benchmarkProfileIds, setBenchmarkProfileIds] = useState<string[]>(["light_noise"]);
+  const [benchmarkProfileIds, setBenchmarkProfileIds] = useState<string[]>(["baseline", "fog"]);
   const [benchmarkSeeds, setBenchmarkSeeds] = useState<string>("12345");
 
   const [compareA, setCompareA] = useState<string>("");
@@ -178,7 +178,7 @@ function App() {
     const tick = async () => {
       if (!alive) return;
       try {
-        const suite = await getBenchmarkSuite(benchmarkSuiteId);
+        const suite = await getBenchmarkBatch(benchmarkSuiteId);
         if (!alive) return;
         setBenchmarkSuite(suite);
       } catch {
@@ -248,14 +248,13 @@ function App() {
 
       const result = await createBenchmark({
         name: "Benchmark Suite",
-        scenario_ids: benchmarkScenarioIds,
-        stress_profile_ids: benchmarkProfileIds.length ? benchmarkProfileIds : ["light_noise"],
+        scenarios: benchmarkScenarioIds,
+        stress_profiles: benchmarkProfileIds.length ? benchmarkProfileIds : ["fog"],
         seeds: seeds.length ? seeds : [12345],
-        include_baselines: true,
-        base_options: { resize: 320, every_n_frames: 1, max_frames: 60 },
+        run_options_overrides: { resize: 320, every_n_frames: 1, max_frames: 60 },
       });
-      setBenchmarkSuiteId(result.suite_id);
-      setBenchmarkSuite(result.suite);
+      setBenchmarkSuiteId(result.batch_id);
+      setBenchmarkSuite(null);
     } catch (err) {
       setRunCreateError(err instanceof Error ? err.message : "Failed to start benchmark suite");
     } finally {
@@ -268,7 +267,7 @@ function App() {
     setRunCreateError(null);
     setCreatingRun(true);
     try {
-      const result = await compareRuns(compareA, compareB);
+      const result = await compareRuns([compareA, compareB]);
       setCompareResult(result as unknown as Record<string, unknown>);
     } catch (err) {
       setRunCreateError(err instanceof Error ? err.message : "Failed to compare runs");
@@ -476,8 +475,7 @@ function App() {
                   <div className="mt-4 rounded border border-tactical-700 bg-tactical-950/40 p-3">
                     <p className="text-sm text-slate-200">
                       Suite: <span className="font-mono">{benchmarkSuite.id}</span> • Status:{" "}
-                      <span className="text-accent-amber">{benchmarkSuite.status}</span> • Progress:{" "}
-                      {benchmarkSuite.progress}%
+                      <span className="text-accent-amber">{benchmarkSuite.status}</span> • {String(benchmarkSuite.message ?? "")}
                     </p>
                     <div className="mt-3 overflow-x-auto">
                       <table className="w-full min-w-[900px] border-collapse text-left text-sm">
@@ -494,27 +492,109 @@ function App() {
                         </thead>
                         <tbody className="text-slate-200">
                           {benchmarkSuite.items.map((item) => (
-                            <tr key={item.run_id} className="border-b border-tactical-900/60">
+                            <tr key={String(item.run_id ?? item.id)} className="border-b border-tactical-900/60">
                               <td className="py-2 pr-3">{item.scenario_id}</td>
                               <td className="py-2 pr-3">{item.seed ?? "n/a"}</td>
-                              <td className="py-2 pr-3">{item.stress_profile_id}</td>
+                              <td className="py-2 pr-3">{String(item.stress_profile?.id ?? "n/a")}</td>
                               <td className="py-2 pr-3">{item.role}</td>
                               <td className="py-2 pr-3">{item.status}</td>
-                              <td className="py-2 pr-3">{item.stage}</td>
+                              <td className="py-2 pr-3">n/a</td>
                               <td className="py-2">
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedRunId(item.run_id)}
-                                  className="rounded border border-tactical-700 bg-tactical-900/60 px-2 py-1 font-mono text-xs"
-                                >
-                                  {item.run_id}
-                                </button>
+                                {item.run_id ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedRunId(String(item.run_id))}
+                                    className="rounded border border-tactical-700 bg-tactical-900/60 px-2 py-1 font-mono text-xs"
+                                  >
+                                    {item.run_id}
+                                  </button>
+                                ) : (
+                                  <span className="text-slate-500">pending</span>
+                                )}
                               </td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
+
+                    {benchmarkSuite.status === "completed" && benchmarkSuite.summary ? (
+                      <div className="mt-4 grid gap-4 md:grid-cols-2">
+                        <div className="rounded border border-tactical-700 bg-black/30 p-3">
+                          <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Overall</p>
+                          <div className="mt-2 text-sm text-slate-200">
+                            <p>Mean: {String((benchmarkSuite.summary as any)?.overall?.mean_readiness ?? "n/a")}</p>
+                            <p>Median: {String((benchmarkSuite.summary as any)?.overall?.median_readiness ?? "n/a")}</p>
+                            <p>Worst: {String((benchmarkSuite.summary as any)?.overall?.worst_readiness ?? "n/a")}</p>
+                            <p>Pass (&ge; 75): {String((benchmarkSuite.summary as any)?.overall?.pass_rate_ready ?? "n/a")}</p>
+                          </div>
+                        </div>
+                        <div className="rounded border border-tactical-700 bg-black/30 p-3">
+                          <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Top Blindspot Reasons</p>
+                          <div className="mt-2 space-y-1 text-sm text-slate-200">
+                            {Array.isArray((benchmarkSuite.summary as any)?.top_blindspot_reasons) &&
+                            ((benchmarkSuite.summary as any)?.top_blindspot_reasons as any[]).length > 0 ? (
+                              ((benchmarkSuite.summary as any)?.top_blindspot_reasons as any[]).slice(0, 6).map((r, idx) => (
+                                <p key={idx}>
+                                  {String(r.reason ?? "n/a")}: {String(r.count ?? "0")}
+                                </p>
+                              ))
+                            ) : (
+                              <p className="text-slate-400">n/a</p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="rounded border border-tactical-700 bg-black/30 p-3 md:col-span-2">
+                          <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">By Stress Profile</p>
+                          <div className="mt-3 overflow-x-auto">
+                            <table className="w-full min-w-[700px] border-collapse text-left text-sm">
+                              <thead className="text-xs uppercase tracking-[0.2em] text-tactical-300">
+                                <tr>
+                                  <th className="border-b border-tactical-700 py-2 pr-3">Profile</th>
+                                  <th className="border-b border-tactical-700 py-2 pr-3">Count</th>
+                                  <th className="border-b border-tactical-700 py-2 pr-3">Mean</th>
+                                  <th className="border-b border-tactical-700 py-2 pr-3">Worst</th>
+                                  <th className="border-b border-tactical-700 py-2">Chart</th>
+                                </tr>
+                              </thead>
+                              <tbody className="text-slate-200">
+                                {Object.entries(((benchmarkSuite.summary as any)?.by_stress_profile ?? {}) as Record<string, any>).map(
+                                  ([profileId, row]) => {
+                                    const m = toNumber(row?.mean, 0);
+                                    return (
+                                      <tr key={profileId} className="border-b border-tactical-900/60">
+                                        <td className="py-2 pr-3">{profileId}</td>
+                                        <td className="py-2 pr-3">{String(row?.count ?? "0")}</td>
+                                        <td className="py-2 pr-3">{String(row?.mean ?? "n/a")}</td>
+                                        <td className="py-2 pr-3">{String(row?.worst ?? "n/a")}</td>
+                                        <td className="py-2">
+                                          <div className="h-2 w-full rounded bg-tactical-800/60">
+                                            <div
+                                              className="h-2 rounded bg-accent-amber"
+                                              style={{ width: `${Math.max(0, Math.min(100, m))}%` }}
+                                            />
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    );
+                                  },
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        <details className="rounded border border-tactical-700 bg-black/30 p-3 md:col-span-2">
+                          <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.2em] text-tactical-200">
+                            Raw Summary JSON
+                          </summary>
+                          <pre className="mt-3 max-h-[280px] overflow-auto text-xs text-slate-200">
+                            {JSON.stringify(benchmarkSuite.summary, null, 2)}
+                          </pre>
+                        </details>
+                      </div>
+                    ) : null}
                   </div>
                 ) : (
                   <p className="mt-4 text-sm text-slate-400">No suite running.</p>
@@ -528,18 +608,25 @@ function App() {
                   Run Comparison
                 </summary>
                 <p className="mt-2 text-sm text-slate-300">Compare two runs (metrics + readiness deltas).</p>
+                <datalist id="run-ids">
+                  {runs.map((r) => (
+                    <option key={r.id} value={r.id} />
+                  ))}
+                </datalist>
                 <div className="mt-4 grid gap-3 md:grid-cols-3">
                   <input
                     value={compareA}
                     onChange={(e) => setCompareA(e.target.value)}
                     className="rounded border border-tactical-700 bg-tactical-950/40 px-3 py-2 text-sm"
                     placeholder="run_id A"
+                    list="run-ids"
                   />
                   <input
                     value={compareB}
                     onChange={(e) => setCompareB(e.target.value)}
                     className="rounded border border-tactical-700 bg-tactical-950/40 px-3 py-2 text-sm"
                     placeholder="run_id B"
+                    list="run-ids"
                   />
                   <button
                     type="button"
@@ -551,9 +638,39 @@ function App() {
                   </button>
                 </div>
                 {compareResult ? (
-                  <pre className="mt-4 max-h-[420px] overflow-auto rounded border border-tactical-700 bg-black/30 p-3 text-xs text-slate-200">
-                    {JSON.stringify(compareResult, null, 2)}
-                  </pre>
+                  <div className="mt-4 space-y-3">
+                    <div className="overflow-x-auto rounded border border-tactical-700 bg-black/30 p-3">
+                      <table className="w-full min-w-[820px] border-collapse text-left text-sm">
+                        <thead className="text-xs uppercase tracking-[0.2em] text-tactical-300">
+                          <tr>
+                            <th className="border-b border-tactical-700 py-2 pr-3">Field</th>
+                            <th className="border-b border-tactical-700 py-2 pr-3">{compareA}</th>
+                            <th className="border-b border-tactical-700 py-2">{compareB}</th>
+                          </tr>
+                        </thead>
+                        <tbody className="text-slate-200">
+                          {Array.isArray((compareResult as any)?.aligned)
+                            ? ((compareResult as any).aligned as any[]).map((row, idx) => (
+                                <tr key={idx} className="border-b border-tactical-900/60">
+                                  <td className="py-2 pr-3">{String(row.label ?? row.field ?? "n/a")}</td>
+                                  <td className="py-2 pr-3">{String(row.values?.[compareA] ?? "n/a")}</td>
+                                  <td className="py-2">{String(row.values?.[compareB] ?? "n/a")}</td>
+                                </tr>
+                              ))
+                            : null}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <details className="rounded border border-tactical-700 bg-black/30 p-3">
+                      <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.2em] text-tactical-200">
+                        Raw Compare JSON
+                      </summary>
+                      <pre className="mt-3 max-h-[420px] overflow-auto text-xs text-slate-200">
+                        {JSON.stringify(compareResult, null, 2)}
+                      </pre>
+                    </details>
+                  </div>
                 ) : (
                   <p className="mt-4 text-sm text-slate-400">No comparison loaded.</p>
                 )}

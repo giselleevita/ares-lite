@@ -1,0 +1,40 @@
+{
+  "profiles": [
+    {
+      "id": "baseline",
+      "name": "Baseline (No Stress)",
+      "description": "Disable stressors entirely.",
+      "stressors": [],
+      "params": {}
+    },
+    {
+      "id": "low_light",
+      "name": "Low Light",
+      "description": "Darken the scene via gamma + brightness scale.",
+      "stressors": ["low_light"],
+      "params": { "low_light": { "gamma": 0.85, "brightness_scale": 0.75 } }
+    },
+    {
+      "id": "fog",
+      "name": "Fog",
+      "description": "Contrast reduction + haze noise.",
+      "stressors": ["fog"],
+      "params": { "fog": { "contrast": 0.7, "noise_std": 6.0 } }
+    },
+    {
+      "id": "motion_blur",
+      "name": "Motion Blur",
+      "description": "Directional blur kernel.",
+      "stressors": ["motion_blur"],
+      "params": { "motion_blur": { "kernel_size": 9, "axis": "horizontal" } }
+    },
+    {
+      "id": "frame_drop",
+      "name": "Frame Drop",
+      "description": "Simulate dropped frames by keeping every Nth frame.",
+      "stressors": ["frame_drop"],
+      "params": { "frame_drop": { "keep_every": 3 } }
+    }
+  ]
+}
+

@@ -26,7 +26,12 @@ from pipeline.blindspots import (
 from pipeline.ingest import load_scenarios_payload
 from pipeline.orchestrator import enqueue_run_request, execute_run_sync
 from benchmarking.profiles import list_stress_profiles
-from benchmarking.suite import create_benchmark_suite, suite_status_snapshot
+from benchmarking.batch import (
+    create_benchmark_batch,
+    list_batches,
+    reconcile_batch,
+    batch_snapshot,
+)
 
 configure_logging()
 
@@ -218,89 +223,151 @@ def get_stress_profiles() -> dict[str, Any]:
 
 
 class BenchmarkRequest(BaseModel):
-    name: str = "Benchmark Suite"
-    scenario_ids: list[str] = Field(default_factory=list, min_length=1)
-    stress_profile_ids: list[str] = Field(default_factory=lambda: ["light_noise"], min_length=1)
+    name: str = "Benchmark Batch"
+    scenarios: list[str] = Field(default_factory=list, min_length=1)
+    # Accept preset ids or full objects. For now, UI sends preset ids.
+    stress_profiles: list[Any] = Field(default_factory=lambda: ["fog"], min_length=1)
     seeds: list[int] = Field(default_factory=lambda: [12345], min_length=1)
-    include_baselines: bool = True
-    base_options: RunOptions = Field(default_factory=RunOptions)
+    run_options_overrides: dict[str, Any] = Field(default_factory=lambda: {"resize": 320, "every_n_frames": 1, "max_frames": 60})
 
 
 @app.post("/api/benchmarks")
 def create_benchmark(payload: BenchmarkRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
-    suite_id = create_benchmark_suite(
+    batch_id, item_count = create_benchmark_batch(
         db=db,
         name=payload.name,
-        scenario_ids=payload.scenario_ids,
-        stress_profile_ids=payload.stress_profile_ids,
+        scenarios=payload.scenarios,
+        stress_profiles=payload.stress_profiles,
         seeds=payload.seeds,
-        base_options=payload.base_options.model_dump(),
-        include_baselines=payload.include_baselines,
+        run_options_overrides=payload.run_options_overrides,
         validate_scenarios=True,
     )
-    snapshot = suite_status_snapshot(db, suite_id)
-    return {"suite_id": suite_id, "suite": snapshot}
+    return {"batch_id": batch_id, "item_count": item_count}
 
 
-@app.get("/api/benchmarks/{suite_id}")
-def get_benchmark_suite(suite_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    snapshot = suite_status_snapshot(db, suite_id)
+@app.get("/api/benchmarks")
+def list_benchmarks(limit: int = 25, db: Session = Depends(get_db)) -> dict[str, Any]:
+    batches = list_batches(db=db, limit=limit)
+    items: list[dict[str, Any]] = []
+    for b in batches:
+        items.append(
+            {
+                "id": b.id,
+                "name": b.name,
+                "status": b.status,
+                "message": b.message,
+                "created_at": b.created_at.isoformat(),
+                "updated_at": b.updated_at.isoformat(),
+            }
+        )
+    return {"batches": items}
+
+
+@app.get("/api/benchmarks/{batch_id}")
+def get_benchmark_batch(batch_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    # Reconcile on read so status/summary stays fresh with zero additional infra.
+    snapshot = reconcile_batch(db, batch_id)
     if snapshot is None:
-        raise HTTPException(status_code=404, detail="Benchmark suite not found")
+        snapshot = batch_snapshot(db, batch_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Benchmark batch not found")
     return snapshot
 
 
-@app.get("/api/compare/runs")
-def compare_runs(run_a: str, run_b: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    ra = _load_run_or_404(db, run_a)
-    rb = _load_run_or_404(db, run_b)
+class CompareRequest(BaseModel):
+    run_ids: list[str] = Field(default_factory=list, min_length=2)
 
-    def _load_json(model, run_id: str, field: str) -> dict[str, Any]:
-        row = db.query(model).filter(model.run_id == run_id).first()
-        if row is None:
-            return {}
-        try:
-            return json.loads(getattr(row, field) or "{}")
-        except Exception:
-            return {}
+def _load_json_for_run(db: Session, model: Any, run_id: str, field: str) -> dict[str, Any]:
+    row = db.query(model).filter(model.run_id == run_id).first()
+    if row is None:
+        return {}
+    try:
+        payload = json.loads(getattr(row, field) or "{}")
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
-    ma = _load_json(Metric, run_a, "metrics_json")
-    mb = _load_json(Metric, run_b, "metrics_json")
-    rda = _load_json(Readiness, run_a, "readiness_json")
-    rdb = _load_json(Readiness, run_b, "readiness_json")
+def _blindspots_summary(db: Session, run_id: str) -> dict[str, Any]:
+    # Prefer run_metadata.json for completed runs; fall back to DB blindspots endpoint semantics.
+    meta = _load_run_metadata(run_id)
+    if meta and isinstance(meta.get("blindspots"), list):
+        spots = meta.get("blindspots", [])
+        tags: list[str] = []
+        for item in spots:
+            if isinstance(item, dict):
+                for t in item.get("reason_tags", []) if isinstance(item.get("reason_tags"), list) else []:
+                    if isinstance(t, str) and t:
+                        tags.append(t)
+        counts: dict[str, int] = {}
+        for t in tags:
+            counts[t] = counts.get(t, 0) + 1
+        top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        return {"count": len(spots), "top_reason_tags": [{"tag": k, "count": v} for k, v in top]}
+    return {"count": 0, "top_reason_tags": []}
 
-    def _delta(key: str) -> float | None:
-        va = ma.get(key)
-        vb = mb.get(key)
-        if not isinstance(va, (int, float)) or not isinstance(vb, (int, float)):
-            return None
-        return float(vb) - float(va)
+def _compare_payload(db: Session, run_ids: list[str]) -> dict[str, Any]:
+    runs: list[Run] = [(_load_run_or_404(db, rid)) for rid in run_ids]
+    items: list[dict[str, Any]] = []
+    for run in runs:
+        metrics_payload = _load_json_for_run(db, Metric, run.id, "metrics_json")
+        readiness_payload = _load_json_for_run(db, Readiness, run.id, "readiness_json")
+        engagement_payload = _load_json_for_run(db, Engagement, run.id, "engagement_json")
+        items.append(
+            {
+                "id": run.id,
+                "scenario_id": run.scenario_id,
+                "status": run.status,
+                "config": _load_run_config(run),
+                "metrics": metrics_payload,
+                "readiness": readiness_payload,
+                "engagement": engagement_payload,
+                "baseline_missing": bool(metrics_payload.get("baseline_missing", False)),
+                "blindspots": _blindspots_summary(db, run.id),
+            }
+        )
 
-    fields = [
-        "precision",
-        "recall",
-        "track_stability_index",
-        "false_positive_rate_per_minute",
-        "detection_delay_seconds",
+    # Provide a small aligned view for common fields.
+    common_fields = [
+        ("readiness.readiness_score", "Readiness Score"),
+        ("metrics.precision", "Precision"),
+        ("metrics.recall", "Recall"),
+        ("metrics.track_stability_index", "Track Stability"),
+        ("metrics.false_positive_rate_per_minute", "FP/min"),
+        ("metrics.detection_delay_seconds", "Delay (s)"),
     ]
-    metrics_diff = {k: {"a": ma.get(k), "b": mb.get(k), "delta": _delta(k)} for k in fields}
 
-    readiness_a = rda.get("readiness_score")
-    readiness_b = rdb.get("readiness_score")
-    readiness_delta = None
-    if isinstance(readiness_a, (int, float)) and isinstance(readiness_b, (int, float)):
-        readiness_delta = float(readiness_b) - float(readiness_a)
+    def _get_path(obj: dict[str, Any], path: str) -> Any:
+        cur: Any = obj
+        for part in path.split("."):
+            if not isinstance(cur, dict):
+                return None
+            cur = cur.get(part)
+        return cur
 
     return {
-        "run_a": {"id": ra.id, "scenario_id": ra.scenario_id, "status": ra.status, "config": _load_run_config(ra)},
-        "run_b": {"id": rb.id, "scenario_id": rb.scenario_id, "status": rb.status, "config": _load_run_config(rb)},
-        "metrics": metrics_diff,
-        "readiness": {
-            "a": rda,
-            "b": rdb,
-            "delta": readiness_delta,
-        },
+        "runs": items,
+        "aligned": [
+            {
+                "field": path,
+                "label": label,
+                "values": {item["id"]: _get_path(item, path) for item in items},
+            }
+            for path, label in common_fields
+        ],
     }
+
+
+@app.post("/api/compare")
+def compare_runs(payload: CompareRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    return _compare_payload(db, payload.run_ids)
+
+
+@app.get("/api/runs/compare")
+def compare_runs_get(ids: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    run_ids = [item.strip() for item in (ids or "").split(",") if item.strip()]
+    if len(run_ids) < 2:
+        raise HTTPException(status_code=422, detail="Provide at least two run ids via ids=run_a,run_b")
+    return _compare_payload(db, run_ids)
 
 
 @app.get("/api/runs")

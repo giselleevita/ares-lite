@@ -100,49 +100,42 @@ export type StressProfilesResponse = {
 };
 
 export type BenchmarkItem = {
-  run_id: string;
   scenario_id: string;
   seed: number | null;
-  stress_profile_id: string;
-  role: string;
+  stress_profile: Record<string, unknown>;
+  run_id: string | null;
   status: string;
-  stage: string;
-  progress: number;
-  message: string;
-  error_message: string;
+  role: string;
 };
 
-export type BenchmarkSuite = {
+export type BenchmarkBatch = {
   id: string;
   name: string;
   status: string;
-  progress: number;
-  counts: Record<string, number>;
+  message?: string;
   created_at: string;
   updated_at: string;
   config: Record<string, unknown>;
-  items: BenchmarkItem[];
+  summary: Record<string, unknown>;
+  items: Array<BenchmarkItem & { id: number; batch_id: string }>;
 };
 
 export type CreateBenchmarkRequest = {
   name: string;
-  scenario_ids: string[];
-  stress_profile_ids: string[];
+  scenarios: string[];
+  stress_profiles: Array<string | Record<string, unknown>>;
   seeds: number[];
-  include_baselines?: boolean;
-  base_options?: Record<string, unknown>;
+  run_options_overrides: Record<string, unknown>;
 };
 
 export type CreateBenchmarkResponse = {
-  suite_id: string;
-  suite: BenchmarkSuite;
+  batch_id: string;
+  item_count: number;
 };
 
 export type CompareRunsResponse = {
-  run_a: { id: string; scenario_id: string; status: string; config: Record<string, unknown> };
-  run_b: { id: string; scenario_id: string; status: string; config: Record<string, unknown> };
-  metrics: Record<string, { a: unknown; b: unknown; delta: number | null }>;
-  readiness: { a: Record<string, unknown>; b: Record<string, unknown>; delta: number | null };
+  runs: Array<Record<string, unknown>>;
+  aligned: Array<Record<string, unknown>>;
 };
 
 const API_BASE = String(import.meta.env.VITE_API_BASE ?? "").trim();
@@ -231,13 +224,12 @@ export function createBenchmark(payload: CreateBenchmarkRequest): Promise<Create
   return postJson<CreateBenchmarkResponse>("/api/benchmarks", payload);
 }
 
-export function getBenchmarkSuite(suiteId: string): Promise<BenchmarkSuite> {
-  return getJson<BenchmarkSuite>(`/api/benchmarks/${suiteId}`);
+export function getBenchmarkBatch(batchId: string): Promise<BenchmarkBatch> {
+  return getJson<BenchmarkBatch>(`/api/benchmarks/${batchId}`);
 }
 
-export function compareRuns(runA: string, runB: string): Promise<CompareRunsResponse> {
-  const params = new URLSearchParams({ run_a: runA, run_b: runB });
-  return getJson<CompareRunsResponse>(`/api/compare/runs?${params.toString()}`);
+export function compareRuns(runIds: string[]): Promise<CompareRunsResponse> {
+  return postJson<CompareRunsResponse>("/api/compare", { run_ids: runIds });
 }
 
 export function withApiBase(path: string): string {

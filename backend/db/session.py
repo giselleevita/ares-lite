@@ -90,6 +90,7 @@ def _ensure_runs_columns() -> None:
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_runs_columns()
+    _ensure_benchmark_schema()
     _ensure_indexes()
 
 
@@ -112,6 +113,67 @@ def _ensure_indexes() -> None:
                 "CREATE INDEX IF NOT EXISTS ix_runs_status_locked_at ON runs (status, locked_at)"
             )
         )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_benchmark_items_batch_created ON benchmark_items (batch_id, created_at)"
+            )
+        )
+
+
+def _ensure_benchmark_schema() -> None:
+    """Best-effort migration for benchmark batches/items tables."""
+    if not settings.database_url.startswith("sqlite"):
+        return
+
+    with engine.begin() as conn:
+        existing_tables = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'")
+            ).fetchall()
+        }
+
+        # If we have a legacy table, migrate/copy into the new table.
+        if "benchmark_suites" in existing_tables and "benchmark_batches" not in existing_tables:
+            conn.execute(text("ALTER TABLE benchmark_suites RENAME TO benchmark_batches"))
+            existing_tables.remove("benchmark_suites")
+            existing_tables.add("benchmark_batches")
+        elif "benchmark_suites" in existing_tables and "benchmark_batches" in existing_tables:
+            # create_all may have already created the new table; copy rows forward best-effort.
+            conn.execute(
+                text(
+                    """
+                    INSERT OR IGNORE INTO benchmark_batches (id, name, created_at, updated_at, status, message, config_json)
+                    SELECT id, name, created_at, updated_at, status, message, config_json
+                    FROM benchmark_suites
+                    """
+                )
+            )
+
+        if "benchmark_batches" in existing_tables:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(benchmark_batches)")).fetchall()}
+            if "summary_json" not in cols:
+                conn.execute(text("ALTER TABLE benchmark_batches ADD COLUMN summary_json TEXT DEFAULT '{}'"))
+
+        if "benchmark_items" in existing_tables:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(benchmark_items)")).fetchall()}
+            if "batch_id" not in cols and "suite_id" in cols:
+                conn.execute(text("ALTER TABLE benchmark_items ADD COLUMN batch_id VARCHAR(64)"))
+                conn.execute(text("UPDATE benchmark_items SET batch_id = suite_id WHERE batch_id IS NULL"))
+            elif "batch_id" in cols and "suite_id" in cols:
+                conn.execute(text("UPDATE benchmark_items SET batch_id = suite_id WHERE (batch_id IS NULL OR batch_id = '')"))
+            if "stress_profile_json" not in cols:
+                conn.execute(text("ALTER TABLE benchmark_items ADD COLUMN stress_profile_json TEXT DEFAULT '{}'"))
+                if "stress_profile_id" in cols:
+                    conn.execute(
+                        text(
+                            "UPDATE benchmark_items "
+                            "SET stress_profile_json = ('{\"id\": \"' || stress_profile_id || '\"}') "
+                            "WHERE (stress_profile_json IS NULL OR stress_profile_json = '')"
+                        )
+                    )
+            if "status" not in cols:
+                conn.execute(text("ALTER TABLE benchmark_items ADD COLUMN status VARCHAR(32) DEFAULT 'queued'"))
 
 
 def get_db() -> Generator[Session, None, None]:
