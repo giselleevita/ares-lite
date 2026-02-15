@@ -1,63 +1,67 @@
-# ARES Lite — 2 Minute Demo Script (Phase 1)
+# ARES Lite — 2 Minute Demo Script (Certification Kit)
 
-## Objective
+## Goal
 
-Show that ARES Lite already behaves like a deployable reliability product scaffold:
-- system boots with one command
-- scenarios are loaded through API
-- canned readiness output demonstrates stress impact narrative
+In 2 minutes, prove ARES Lite is more than a CV demo: it is an offline, reproducible test range with:
+- deterministic runs + benchmarking
+- evidence packs with chain-of-custody hashes
+- policy-as-code gates (PASS/FAIL)
+- delta-first comparisons (baseline vs stress)
 
-## Pre-demo Setup
+## Pre-Demo (30s)
 
 ```bash
 cd /Users/yusaf/ARES-lite
-make setup
+make doctor
 ```
+
+If ports are busy, pick alternates:
+- Local dev: `ARES_BACKEND_PORT=8001 ARES_FRONTEND_PORT=5174 make demo`
+- Docker: `ARES_BACKEND_PORT=8001 ARES_FRONTEND_PORT=5174 make docker-demo`
 
 ## Demo Flow (2 minutes)
 
-1. Start stack
-```bash
-make dev
-```
-What to say:
-- "ARES Lite is an offline CPU-safe reliability simulator for Counter-UAS systems."
-- "Backend and frontend are running locally with deterministic behavior."
-
-2. Open UI
-- Navigate to `http://127.0.0.1:5173`
-- Point at:
-  - Operational title
-  - Backend status card
-  - Scenario count card
-  - Readiness snapshot cards
-
-3. Validate backend endpoints quickly (new terminal)
-```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8000/api/scenarios
-```
-What to say:
-- "Scenarios and health telemetry are exposed via the API surface that later phases consume."
-
-4. Run canned readiness demo (new terminal)
+1) Start the stack (one command)
 ```bash
 make demo
 ```
-Expected output:
-- `urban_dusk readiness: 82`
-- `forest_occlusion readiness: 67`
-- `degradation observed under stress: yes`
+Say:
+- "Offline, CPU-only, deterministic by seed. No external infra."
 
-What to say:
-- "Even in Phase 1, the demo mode establishes the final product narrative: stress lowers readiness."
+2) Open UI
+- `http://127.0.0.1:5173`
+Say:
+- "Single run still works. Benchmarks and compare are additive."
 
-## Backup Mode
+3) Run Demo (deterministic)
+- Click `Run Demo` (fixed seed)
+Say:
+- "Same inputs produce the same outputs. This is critical for audit and regression testing."
 
-If the UI cannot be shown live:
-1. Run API checks and `make demo` only.
-2. Explain this is scaffold mode and full reliability pipeline is wired in upcoming phases.
+4) Show Gate + Evidence Pack
+- After completion: note `Gate: PASS/FAIL/UNKNOWN`
+- Click `Download Evidence Pack`
+Say:
+- "This ZIP contains the report + JSONs + overlays and a manifest with SHA256 hashes. That is chain-of-custody."
+
+5) Benchmark Batch (30s)
+- Go to `Benchmarks`, create a small batch:
+  - profiles: baseline + fog (or low_light)
+  - seeds: 12345
+- When complete: point at:
+  - gate pass-rate
+  - worst regressions
+  - `Download CSV` and `Download Evidence Pack`
+Say:
+- "This becomes a release gate. We can run it in CI and fail builds on regressions."
+
+6) Compare (20s)
+- Go to `Compare`, select baseline + stressed run(s)
+- Point at deltas and `Top Regressions`
+Say:
+- "Delta-first view shows what regressed under stress and by how much."
 
 ## Exit
 
-Stop `make dev` with `Ctrl+C`.
+- Stop `make demo` with `Ctrl+C`.
+- Docker: `ARES_BACKEND_PORT=8001 ARES_FRONTEND_PORT=5174 make docker-selftest` for a proof run.
