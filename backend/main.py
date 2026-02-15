@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from core.logging import configure_logging
 from core.settings import settings
 from core.diagnostics import collect_health_diagnostics
+from core.gates import evaluate_gate, load_gates_config, save_gates_config
 from db.models import Engagement, Metric, Readiness, Run
 from db.session import get_db, init_db
 from pipeline.job_queue import start_worker, worker_status
@@ -33,6 +34,7 @@ from benchmarking.batch import (
     batch_snapshot,
 )
 from benchmarking.export import export_batch_csv
+from reporting.evidence import build_batch_evidence_pack, build_run_evidence_pack, evaluate_batch_gate
 
 configure_logging()
 
@@ -225,6 +227,20 @@ def get_stress_profiles() -> dict[str, Any]:
     return {"profiles": list_stress_profiles()}
 
 
+@app.get("/api/gates")
+def get_gates() -> dict[str, Any]:
+    return load_gates_config()
+
+
+@app.post("/api/gates")
+def set_gates(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        save_gates_config(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return load_gates_config()
+
+
 class BenchmarkRequest(BaseModel):
     name: str = "Benchmark Batch"
     scenarios: list[str] = Field(default_factory=list, min_length=1)
@@ -290,8 +306,26 @@ def export_benchmark_batch_csv(batch_id: str, db: Session = Depends(get_db)) -> 
     )
 
 
+@app.get("/api/benchmarks/{batch_id}/gate")
+def get_benchmark_batch_gate(batch_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    try:
+        return evaluate_batch_gate(db, batch_id=batch_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Benchmark batch not found")
+
+
+@app.get("/api/benchmarks/{batch_id}/evidence.zip")
+def get_benchmark_batch_evidence(batch_id: str, db: Session = Depends(get_db)) -> FileResponse:
+    try:
+        path = build_batch_evidence_pack(db, batch_id=batch_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Benchmark batch not found")
+    return FileResponse(path, media_type="application/zip", filename=f"{batch_id}_evidence.zip")
+
+
 class CompareRequest(BaseModel):
     run_ids: list[str] = Field(default_factory=list, min_length=2)
+    baseline_run_id: str | None = None
 
 def _load_json_for_run(db: Session, model: Any, run_id: str, field: str) -> dict[str, Any]:
     row = db.query(model).filter(model.run_id == run_id).first()
@@ -321,7 +355,7 @@ def _blindspots_summary(db: Session, run_id: str) -> dict[str, Any]:
         return {"count": len(spots), "top_reason_tags": [{"tag": k, "count": v} for k, v in top]}
     return {"count": 0, "top_reason_tags": []}
 
-def _compare_payload(db: Session, run_ids: list[str]) -> dict[str, Any]:
+def _compare_payload(db: Session, run_ids: list[str], baseline_run_id: str | None = None) -> dict[str, Any]:
     runs: list[Run] = [(_load_run_or_404(db, rid)) for rid in run_ids]
     items: list[dict[str, Any]] = []
     for run in runs:
@@ -360,30 +394,56 @@ def _compare_payload(db: Session, run_ids: list[str]) -> dict[str, Any]:
             cur = cur.get(part)
         return cur
 
-    return {
-        "runs": items,
-        "aligned": [
-            {
-                "field": path,
-                "label": label,
-                "values": {item["id"]: _get_path(item, path) for item in items},
-            }
-            for path, label in common_fields
-        ],
-    }
+    baseline_id = baseline_run_id if baseline_run_id in {r.id for r in runs} else (runs[0].id if runs else None)
+    baseline_item = next((it for it in items if it.get("id") == baseline_id), None) if baseline_id else None
+
+    aligned: list[dict[str, Any]] = []
+    regressions: list[dict[str, Any]] = []
+    lower_is_better = {"metrics.false_positive_rate_per_minute", "metrics.detection_delay_seconds"}
+
+    for path, label in common_fields:
+        values = {item["id"]: _get_path(item, path) for item in items}
+        deltas: dict[str, Any] = {}
+        base = _get_path(baseline_item, path) if isinstance(baseline_item, dict) else None
+        base_num = base if isinstance(base, (int, float)) else None
+        for rid, v in values.items():
+            if rid == baseline_id:
+                deltas[rid] = 0.0 if base_num is not None else None
+                continue
+            if isinstance(v, (int, float)) and base_num is not None:
+                delta = float(v) - float(base_num)
+                deltas[rid] = delta
+                # Regression magnitude.
+                mag = 0.0
+                if path in lower_is_better:
+                    mag = delta if delta > 0 else 0.0
+                else:
+                    mag = (-delta) if delta < 0 else 0.0
+                if mag > 0:
+                    regressions.append({"run_id": rid, "field": path, "label": label, "delta": delta, "magnitude": mag})
+            else:
+                deltas[rid] = None
+
+        aligned.append({"field": path, "label": label, "values": values, "baseline_run_id": baseline_id, "deltas": deltas})
+
+    top_regressions = sorted(regressions, key=lambda r: float(r.get("magnitude", 0.0)), reverse=True)[:10]
+    for r in top_regressions:
+        r.pop("magnitude", None)
+
+    return {"baseline_run_id": baseline_id, "runs": items, "aligned": aligned, "top_regressions": top_regressions}
 
 
 @app.post("/api/compare")
 def compare_runs(payload: CompareRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
-    return _compare_payload(db, payload.run_ids)
+    return _compare_payload(db, payload.run_ids, payload.baseline_run_id)
 
 
 @app.get("/api/runs/compare")
-def compare_runs_get(ids: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+def compare_runs_get(ids: str, baseline_run_id: str | None = None, db: Session = Depends(get_db)) -> dict[str, Any]:
     run_ids = [item.strip() for item in (ids or "").split(",") if item.strip()]
     if len(run_ids) < 2:
         raise HTTPException(status_code=422, detail="Provide at least two run ids via ids=run_a,run_b")
-    return _compare_payload(db, run_ids)
+    return _compare_payload(db, run_ids, baseline_run_id)
 
 
 @app.get("/api/runs")
@@ -481,6 +541,54 @@ def get_run(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
         "error_message": getattr(run_record, "error_message", ""),
         "config": json.loads(run_record.config_json),
     }
+
+
+@app.get("/api/runs/{run_id}/gate")
+def get_run_gate(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    run_record = _load_run_or_404(db, run_id)
+
+    metrics_row = db.query(Metric).filter(Metric.run_id == run_id).first()
+    readiness_row = db.query(Readiness).filter(Readiness.run_id == run_id).first()
+    engagement_row = db.query(Engagement).filter(Engagement.run_id == run_id).first()
+
+    try:
+        metrics_payload = json.loads(metrics_row.metrics_json) if metrics_row and metrics_row.metrics_json else {}
+    except Exception:
+        metrics_payload = {}
+    try:
+        readiness_payload = json.loads(readiness_row.readiness_json) if readiness_row and readiness_row.readiness_json else {}
+    except Exception:
+        readiness_payload = {}
+    try:
+        engagement_payload = json.loads(engagement_row.engagement_json) if engagement_row and engagement_row.engagement_json else {}
+    except Exception:
+        engagement_payload = {}
+
+    baseline_missing = bool((metrics_payload or {}).get("baseline_missing", False))
+    run_payload = {
+        "id": run_record.id,
+        "scenario_id": run_record.scenario_id,
+        "status": run_record.status,
+        "stage": getattr(run_record, "stage", run_record.status),
+        "progress": getattr(run_record, "progress", 0),
+        "message": getattr(run_record, "message", ""),
+        "error_message": getattr(run_record, "error_message", ""),
+    }
+
+    return evaluate_gate(
+        run=run_payload,
+        metrics=metrics_payload if isinstance(metrics_payload, dict) else {},
+        readiness=readiness_payload if isinstance(readiness_payload, dict) else {},
+        engagement=engagement_payload if isinstance(engagement_payload, dict) else {},
+        baseline_missing=baseline_missing,
+    )
+
+
+@app.get("/api/runs/{run_id}/evidence.zip")
+def get_run_evidence(run_id: str, include_frames: bool = True, db: Session = Depends(get_db)) -> FileResponse:
+    _ = _load_run_or_404(db, run_id)
+    path = build_run_evidence_pack(db, run_id=run_id, include_frames=include_frames)
+    return FileResponse(path, media_type="application/zip", filename=f"{run_id}_evidence.zip")
 
 
 @app.post("/api/runs/{run_id}/cancel")

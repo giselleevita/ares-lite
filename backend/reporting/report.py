@@ -52,6 +52,7 @@ def generate_run_report(
     metrics_payload: dict[str, Any],
     engagement_payload: dict[str, Any],
     readiness_payload: dict[str, Any],
+    gate_payload: dict[str, Any] | None,
     blindspots: list[dict[str, Any]],
     ground_truth_by_frame: dict[int, list[dict[str, Any]]],
     detections_by_frame: dict[int, list[dict[str, Any]]],
@@ -95,6 +96,7 @@ def generate_run_report(
         readiness=readiness_payload,
         metrics=metrics_payload,
         engagement=engagement_payload,
+        gate=gate_payload,
         blindspots=blindspot_previews,
     )
 

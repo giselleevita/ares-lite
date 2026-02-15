@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from core.boxes import BoxValidationError, normalize_prediction_boxes
 from core.cancel import CancelledRun
+from core.gates import evaluate_gate, load_gates_config
 from core.rng import choose_seed
 from core.settings import settings
 from db.models import Detection
@@ -303,6 +304,16 @@ def process_run(
     )
     upsert_readiness(db=db, run_id=run_id, readiness_payload=readiness_payload)
 
+    gates_config = load_gates_config()
+    gate_payload = evaluate_gate(
+        run={"id": run_id, "scenario_id": str(scenario.get("id")), "status": "processing"},
+        metrics=reliability_payload,
+        readiness=readiness_payload,
+        engagement=engagement_payload,
+        baseline_missing=baseline_missing,
+        gates_config=gates_config,
+    )
+
     db.commit()
 
     if is_cancel_requested(db, run_id):
@@ -334,6 +345,7 @@ def process_run(
         metrics_payload=reliability_payload,
         engagement_payload=engagement_payload,
         readiness_payload=readiness_payload,
+        gate_payload=gate_payload,
         blindspots=blindspots,
         ground_truth_by_frame=ground_truth_by_frame,
         detections_by_frame=detections_by_frame,
@@ -368,6 +380,8 @@ def process_run(
         "reliability_metrics": reliability_payload,
         "baseline_key": baseline_key,
         "baseline_matched_run_id": baseline_run_id,
+        "gate": gate_payload,
+        "gates_config_snapshot": gates_config,
         "engagement": engagement_payload,
         "readiness": readiness_payload,
         "blindspots": blindspots,

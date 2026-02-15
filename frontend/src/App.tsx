@@ -7,8 +7,11 @@ import {
   listBenchmarkBatches,
   getBenchmarkBatch,
   downloadBenchmarkCsv,
+  downloadBenchmarkEvidence,
   getHealth,
   getRun,
+  getRunGate,
+  downloadRunEvidence,
   getRunBlindspots,
   getRunEngagement,
   getRunMetrics,
@@ -53,6 +56,7 @@ function App() {
   const [engagement, setEngagement] = useState<Record<string, unknown> | null>(null);
   const [readiness, setReadiness] = useState<Record<string, unknown> | null>(null);
   const [blindspots, setBlindspots] = useState<Blindspot[]>([]);
+  const [runGate, setRunGate] = useState<Record<string, unknown> | null>(null);
 
   const [stressProfiles, setStressProfiles] = useState<StressProfile[]>([]);
   const [benchmarkBatches, setBenchmarkBatches] = useState<BenchmarkBatchSummary[]>([]);
@@ -129,17 +133,19 @@ function App() {
 
         const status = String((run as unknown as { status?: unknown }).status ?? "");
         if (status === "completed") {
-          const [m, e, r, b] = await Promise.all([
+          const [m, e, r, b, g] = await Promise.all([
             getRunMetrics(selectedRunId),
             getRunEngagement(selectedRunId),
             getRunReadiness(selectedRunId),
             getRunBlindspots(selectedRunId),
+            getRunGate(selectedRunId).catch(() => ({})),
           ]);
           if (!alive) return;
           setMetrics(m.metrics);
           setEngagement(e.engagement);
           setReadiness(r.readiness);
           setBlindspots(b.blindspots);
+          setRunGate(g as unknown as Record<string, unknown>);
           setSelectedBlindspot((current) => current ?? (b.blindspots[0] ?? null));
           if (intervalId != null) {
             window.clearInterval(intervalId);
@@ -151,6 +157,7 @@ function App() {
           setReadiness(null);
           setBlindspots([]);
           setSelectedBlindspot(null);
+          setRunGate(null);
           if (intervalId != null) {
             window.clearInterval(intervalId);
             intervalId = null;
@@ -161,6 +168,7 @@ function App() {
           setReadiness(null);
           setBlindspots([]);
           setSelectedBlindspot(null);
+          setRunGate(null);
         }
       } catch {
         if (!alive) return;
@@ -170,6 +178,7 @@ function App() {
         setReadiness(null);
         setBlindspots([]);
         setSelectedBlindspot(null);
+        setRunGate(null);
       }
     };
 
@@ -312,7 +321,9 @@ function App() {
     setRunCreateError(null);
     setCreatingRun(true);
     try {
-      const result = await compareRuns(ids);
+      const baseline = ids[0] ?? null;
+      const result = await compareRuns(ids, baseline);
+      setCompareSelectedIds(ids);
       setCompareResult(result as unknown as Record<string, unknown>);
     } catch (err) {
       setRunCreateError(err instanceof Error ? err.message : "Failed to compare runs");
@@ -412,16 +423,42 @@ function App() {
     setRunCreateError(null);
     try {
       const blob = await downloadBenchmarkCsv(benchmarkSuiteId);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${benchmarkSuiteId}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `${benchmarkSuiteId}.csv`);
     } catch (err) {
       setRunCreateError(err instanceof Error ? err.message : "Failed to download CSV");
+    }
+  };
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const onDownloadRunEvidence = async () => {
+    if (!selectedRunId) return;
+    setRunCreateError(null);
+    try {
+      const blob = await downloadRunEvidence(selectedRunId, true);
+      downloadBlob(blob, `${selectedRunId}_evidence.zip`);
+    } catch (err) {
+      setRunCreateError(err instanceof Error ? err.message : "Failed to download evidence pack");
+    }
+  };
+
+  const onDownloadBatchEvidence = async () => {
+    if (!benchmarkSuiteId) return;
+    setRunCreateError(null);
+    try {
+      const blob = await downloadBenchmarkEvidence(benchmarkSuiteId);
+      downloadBlob(blob, `${benchmarkSuiteId}_evidence.zip`);
+    } catch (err) {
+      setRunCreateError(err instanceof Error ? err.message : "Failed to download evidence pack");
     }
   };
 
@@ -682,6 +719,48 @@ function App() {
               <p className="mt-1 text-sm text-slate-300">
                 Run: {String(runDetail?.id ?? "n/a")} • Scenario: {String(runDetail?.scenario_id ?? "n/a")} • Status: {String(runDetail?.status ?? "n/a")} • Stage: {String(runDetail?.stage ?? "n/a")} • FNs: {blindspots.length}
               </p>
+              {["completed", "failed", "cancelled"].includes(String(runDetail?.status ?? "")) && selectedRunId ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void onDownloadRunEvidence()}
+                    className="rounded border border-tactical-700 bg-tactical-900/60 px-3 py-2 font-mono text-xs uppercase tracking-widest text-tactical-100 hover:border-tactical-500"
+                  >
+                    Download Evidence Pack
+                  </button>
+                  <div className="rounded border border-tactical-700 bg-black/20 px-3 py-2 text-xs text-slate-200">
+                    Gate:{" "}
+                    <span
+                      className={
+                        String((runGate as any)?.status ?? "") === "pass"
+                          ? "text-accent-amber"
+                          : String((runGate as any)?.status ?? "") === "fail"
+                            ? "text-accent-red"
+                            : "text-slate-400"
+                      }
+                    >
+                      {String((runGate as any)?.status ?? "n/a").toUpperCase()}
+                    </span>
+                  </div>
+                </div>
+              ) : null}
+              {String((runGate as any)?.status ?? "") === "fail" && Array.isArray((runGate as any)?.checks) ? (
+                <details className="mt-3 rounded border border-tactical-700 bg-black/20 p-3">
+                  <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.2em] text-tactical-200">
+                    Failed Gate Checks
+                  </summary>
+                  <ul className="mt-3 space-y-1 text-sm text-slate-200">
+                    {((runGate as any).checks as any[])
+                      .filter((c) => c && c.pass === false)
+                      .slice(0, 8)
+                      .map((c, idx) => (
+                        <li key={idx}>
+                          {String(c.name ?? "n/a")}: {String(c.value ?? "")} {String(c.op ?? "")} {String(c.threshold ?? "")}
+                        </li>
+                      ))}
+                  </ul>
+                </details>
+              ) : null}
               {String(runDetail?.status ?? "") === "processing" && (
                 <div className="mt-3">
                   <button
@@ -883,6 +962,13 @@ function App() {
                       </button>
                       <button
                         type="button"
+                        onClick={() => void onDownloadBatchEvidence()}
+                        className="rounded border border-tactical-700 bg-tactical-900/60 px-3 py-2 font-mono text-xs uppercase tracking-widest text-tactical-100 hover:border-tactical-500"
+                      >
+                        Download Evidence Pack
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => void setBenchmarkSuiteId(benchmarkSuite.id)}
                         className="rounded border border-tactical-700 bg-tactical-900/60 px-3 py-2 font-mono text-xs uppercase tracking-widest text-tactical-200 hover:border-tactical-500"
                       >
@@ -1041,6 +1127,46 @@ function App() {
                           ) : (
                             <p className="text-slate-400">n/a</p>
                           )}
+                        </div>
+                      </div>
+
+                      <div className="rounded border border-tactical-700 bg-black/30 p-3">
+                        <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Gates</p>
+                        <div className="mt-2 text-sm text-slate-200">
+                          <p>Pass rate: {String((benchmarkSuite.summary as any)?.gates?.pass_rate ?? "n/a")}</p>
+                          <p className="mt-2 font-mono text-xs uppercase tracking-widest text-tactical-300">Top failed checks</p>
+                          <div className="mt-1 space-y-1">
+                            {Array.isArray((benchmarkSuite.summary as any)?.gates?.failed_checks_top) &&
+                            ((benchmarkSuite.summary as any)?.gates?.failed_checks_top as any[]).length > 0 ? (
+                              ((benchmarkSuite.summary as any)?.gates?.failed_checks_top as any[]).slice(0, 5).map((r, idx) => (
+                                <p key={idx} className="text-xs text-slate-300">
+                                  {String(r.check ?? "n/a")}: {String(r.count ?? "0")}
+                                </p>
+                              ))
+                            ) : (
+                              <p className="text-slate-400">n/a</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded border border-tactical-700 bg-black/30 p-3">
+                        <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Worst Regressions</p>
+                        <div className="mt-2 text-sm text-slate-200">
+                          <p>Worst readiness delta: {String((benchmarkSuite.summary as any)?.deltas?.worst_delta_readiness ?? "n/a")}</p>
+                          <div className="mt-2 space-y-1">
+                            {Array.isArray((benchmarkSuite.summary as any)?.deltas?.worst_cases) &&
+                            ((benchmarkSuite.summary as any)?.deltas?.worst_cases as any[]).length > 0 ? (
+                              ((benchmarkSuite.summary as any)?.deltas?.worst_cases as any[]).slice(0, 4).map((r, idx) => (
+                                <p key={idx} className="text-xs text-slate-300">
+                                  {String(r.stress_profile_id ?? "n/a")} • {String(r.scenario_id ?? "n/a")} • seed {String(r.seed ?? "n/a")} • Δ readiness{" "}
+                                  {String(r.delta_readiness_score ?? "n/a")}
+                                </p>
+                              ))
+                            ) : (
+                              <p className="text-slate-400">n/a</p>
+                            )}
+                          </div>
                         </div>
                       </div>
 
@@ -1212,17 +1338,50 @@ function App() {
                             ? ((compareResult as any).aligned as any[]).map((row, idx) => (
                                 <tr key={idx} className="border-b border-tactical-900/60">
                                   <td className="py-2 pr-3">{String(row.label ?? row.field ?? "n/a")}</td>
-                                  {compareSelectedIds.map((id) => (
-                                    <td key={id} className="py-2 pr-3">
-                                      {String(row.values?.[id] ?? "n/a")}
-                                    </td>
-                                  ))}
+                                  {compareSelectedIds.map((id) => {
+                                    const value = row.values?.[id];
+                                    const delta = row.deltas?.[id];
+                                    const field = String(row.field ?? "");
+                                    const lowerIsBetter = field === "metrics.false_positive_rate_per_minute" || field === "metrics.detection_delay_seconds";
+                                    const deltaNum = typeof delta === "number" && Number.isFinite(delta) ? delta : null;
+                                    const isBaseline = String(row.baseline_run_id ?? "") === id;
+                                    const regression =
+                                      !isBaseline && deltaNum != null
+                                        ? (lowerIsBetter ? deltaNum > 0 : deltaNum < 0)
+                                        : false;
+                                    const improvement =
+                                      !isBaseline && deltaNum != null
+                                        ? (lowerIsBetter ? deltaNum < 0 : deltaNum > 0)
+                                        : false;
+                                    const cls = regression ? "text-accent-red" : improvement ? "text-accent-amber" : "text-slate-200";
+                                    return (
+                                      <td key={id} className={`py-2 pr-3 ${cls}`}>
+                                        <div>{String(value ?? "n/a")}</div>
+                                        {!isBaseline && deltaNum != null ? (
+                                          <div className="text-xs text-slate-400">Δ {deltaNum.toFixed(4)}</div>
+                                        ) : null}
+                                      </td>
+                                    );
+                                  })}
                                 </tr>
                               ))
                             : null}
                         </tbody>
                       </table>
                     </div>
+
+                    {Array.isArray((compareResult as any)?.top_regressions) && ((compareResult as any).top_regressions as any[]).length > 0 ? (
+                      <section className="rounded border border-tactical-700 bg-black/30 p-3">
+                        <h4 className="font-mono text-xs uppercase tracking-[0.2em] text-tactical-200">Top Regressions</h4>
+                        <div className="mt-2 space-y-1 text-sm text-slate-200">
+                          {((compareResult as any).top_regressions as any[]).slice(0, 8).map((r, idx) => (
+                            <p key={idx}>
+                              {String(r.run_id ?? "n/a")} • {String(r.label ?? r.field ?? "n/a")}: Δ {String(r.delta ?? "n/a")}
+                            </p>
+                          ))}
+                        </div>
+                      </section>
+                    ) : null}
 
                     <section className="rounded border border-tactical-700 bg-black/30 p-3">
                       <h4 className="font-mono text-xs uppercase tracking-[0.2em] text-tactical-200">Readiness Breakdown</h4>

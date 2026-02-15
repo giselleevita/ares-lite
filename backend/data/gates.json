@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "description": "Default run acceptance gates (policy-as-code). Tune for mission needs.",
+  "checks": [
+    { "name": "readiness_score", "source": "readiness", "key": "readiness_score", "op": ">=", "threshold": 75.0, "required": true },
+    { "name": "precision", "source": "metrics", "key": "precision", "op": ">=", "threshold": 0.7, "required": true },
+    { "name": "recall", "source": "metrics", "key": "recall", "op": ">=", "threshold": 0.7, "required": true },
+    { "name": "false_positive_rate_per_minute", "source": "metrics", "key": "false_positive_rate_per_minute", "op": "<=", "threshold": 0.5, "required": true },
+    { "name": "detection_delay_seconds", "source": "metrics", "key": "detection_delay_seconds", "op": "<=", "threshold": 1.5, "required": true },
+    { "name": "track_stability_index", "source": "metrics", "key": "track_stability_index", "op": ">=", "threshold": 0.6, "required": true }
+  ]
+}
+

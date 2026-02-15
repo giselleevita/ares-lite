@@ -100,6 +100,13 @@ Stages are stable strings:
 - `failed`
 - `cancelled`
 
+## Certification Kit (Additive)
+
+ARES Lite adds audit-friendly outputs without changing scoring semantics:
+- **Gates (policy-as-code)**: thresholds in `backend/data/gates.json`, surfaced via `GET /api/runs/{run_id}/gate` and `GET /api/benchmarks/{batch_id}/gate`.
+- **Evidence packs**: `GET /api/runs/{run_id}/evidence.zip` and `GET /api/benchmarks/{batch_id}/evidence.zip`, each including a `manifest.json` with SHA256 hashes and best-effort artifacts.
+- **Delta-first compare**: `POST /api/compare` accepts an optional `baseline_run_id` and returns per-field deltas plus `top_regressions`.
+
 ## Developer Notes
 - Default worker concurrency is 1 to reduce SQLite lock contention.
 - We avoid heavy deps. No Celery/Redis.

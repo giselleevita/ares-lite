@@ -108,19 +108,41 @@
           <div>{{ rec }}</div>
         </article>
         <article class="panel">
+          <h2>Gate</h2>
+          {% if gate and gate.status %}
+          {% set gs = gate.status %}
+          <div class="meta-row {% if gs == 'pass' %}ready{% elif gs == 'unknown' %}limited{% else %}not-ready{% endif %}">
+            {{ gs | upper }}
+          </div>
+          {% if gate.checks %}
+          <div class="meta-row muted">Failed checks:</div>
+          <ul class="muted" style="margin: 6px 0 0 18px;">
+            {% for c in gate.checks %}
+            {% if c.pass is sameas false %}
+            <li>{{ c.name }}: {{ c.value }} {{ c.op }} {{ c.threshold }}</li>
+            {% endif %}
+            {% endfor %}
+          </ul>
+          {% endif %}
+          {% else %}
+          <div class="muted">n/a</div>
+          {% endif %}
+        </article>
+        <article class="panel">
           <h2>Scenario</h2>
           <div class="meta-row">{{ scenario_name }}</div>
           <div class="meta-row muted">{{ scenario_description }}</div>
           <div class="meta-row">Difficulty: {{ scenario_difficulty }}</div>
         </article>
-        <article class="panel">
-          <h2>Stressors</h2>
-          {% if scenario_stressors %}
-          <div>{{ scenario_stressors | join(", ") }}</div>
-          {% else %}
-          <div class="muted">None</div>
-          {% endif %}
-        </article>
+      </section>
+
+      <section class="panel" style="margin-top: 12px;">
+        <h2>Stressors</h2>
+        {% if scenario_stressors %}
+        <div>{{ scenario_stressors | join(", ") }}</div>
+        {% else %}
+        <div class="muted">None</div>
+        {% endif %}
       </section>
 
       {% if readiness.readiness_breakdown %}

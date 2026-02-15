@@ -143,8 +143,10 @@ export type CreateBenchmarkResponse = {
 };
 
 export type CompareRunsResponse = {
+  baseline_run_id?: string | null;
   runs: Array<Record<string, unknown>>;
   aligned: Array<Record<string, unknown>>;
+  top_regressions?: Array<Record<string, unknown>>;
 };
 
 const API_BASE = String(import.meta.env.VITE_API_BASE ?? "").trim();
@@ -225,6 +227,10 @@ export function cancelRun(runId: string): Promise<RunDetail> {
   return postJson<RunDetail>(`/api/runs/${runId}/cancel`, {});
 }
 
+export function getRunGate(runId: string): Promise<Record<string, unknown>> {
+  return getJson<Record<string, unknown>>(`/api/runs/${runId}/gate`);
+}
+
 export function createRun(scenarioId: string, options?: Record<string, unknown>): Promise<RunCreateResponse> {
   return postJson<RunCreateResponse>("/api/run", {
     scenario_id: scenarioId,
@@ -254,8 +260,19 @@ export function downloadBenchmarkCsv(batchId: string): Promise<Blob> {
   return getBlob(`/api/benchmarks/${safeId}/export.csv`);
 }
 
-export function compareRuns(runIds: string[]): Promise<CompareRunsResponse> {
-  return postJson<CompareRunsResponse>("/api/compare", { run_ids: runIds });
+export function downloadBenchmarkEvidence(batchId: string): Promise<Blob> {
+  const safeId = encodeURIComponent(batchId);
+  return getBlob(`/api/benchmarks/${safeId}/evidence.zip`);
+}
+
+export function downloadRunEvidence(runId: string, includeFrames = true): Promise<Blob> {
+  const safeId = encodeURIComponent(runId);
+  const q = includeFrames ? "?include_frames=true" : "?include_frames=false";
+  return getBlob(`/api/runs/${safeId}/evidence.zip${q}`);
+}
+
+export function compareRuns(runIds: string[], baselineRunId?: string | null): Promise<CompareRunsResponse> {
+  return postJson<CompareRunsResponse>("/api/compare", { run_ids: runIds, baseline_run_id: baselineRunId ?? null });
 }
 
 export function withApiBase(path: string): string {

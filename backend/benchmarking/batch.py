@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from core.ids import new_run_id
+from core.gates import evaluate_gate, load_gates_config
 from db.models import BenchmarkBatch, BenchmarkItem, Engagement, Metric, Readiness, Run
 from db.runs import safe_json, touch_run
 from pipeline.ingest import get_scenario_or_404
@@ -160,6 +161,21 @@ def _compute_summary(
     readiness_rows = {r.run_id: _load_json_row(r, "readiness_json") for r in db.query(Readiness).filter(Readiness.run_id.in_(run_ids)).all()} if run_ids else {}
     engagement_rows = {e.run_id: _load_json_row(e, "engagement_json") for e in db.query(Engagement).filter(Engagement.run_id.in_(run_ids)).all()} if run_ids else {}
 
+    gates_config = load_gates_config()
+    gate_status_by_run: dict[str, str] = {}
+    gate_failed_checks: Counter[str] = Counter()
+    gate_by_profile: dict[str, Counter[str]] = defaultdict(Counter)
+
+    # Baseline pairing for deltas: key=(scenario_id, seed) -> baseline run_id
+    baseline_run_by_key: dict[tuple[str, int], str] = {}
+    for item in items:
+        if not item.run_id or item.seed is None:
+            continue
+        if item.role == "baseline":
+            baseline_run_by_key[(item.scenario_id, int(item.seed))] = item.run_id
+
+    deltas: list[dict[str, Any]] = []
+
     for item in items:
         run_id = item.run_id
         if not run_id:
@@ -190,6 +206,52 @@ def _compute_summary(
                 p = {}
             profile_id = str(p.get("id") or "unknown")
             readiness_by_profile[profile_id].append(float(score))
+
+        # Gate evaluation (terminal runs only).
+        if status in {"completed", "failed", "cancelled"}:
+            metrics_payload = metrics_rows.get(run_id, {})
+            baseline_missing = bool(metrics_payload.get("baseline_missing", False))
+            gate_payload = evaluate_gate(
+                run={"id": run_id, "scenario_id": item.scenario_id, "status": status},
+                metrics=metrics_payload,
+                readiness=readiness_payload,
+                engagement=engagement_rows.get(run_id, {}),
+                baseline_missing=baseline_missing,
+                gates_config=gates_config,
+            )
+            gate_status = str(gate_payload.get("status", "unknown"))
+            gate_status_by_run[run_id] = gate_status
+            gate_by_profile[profile_id][gate_status] += 1
+            if gate_status == "fail":
+                for chk in gate_payload.get("checks", []) if isinstance(gate_payload.get("checks"), list) else []:
+                    if isinstance(chk, dict) and chk.get("pass") is False:
+                        gate_failed_checks[str(chk.get("name") or "unknown")] += 1
+
+        # Delta vs baseline for stressed items when a baseline exists.
+        if item.role != "baseline" and item.seed is not None:
+            baseline_run_id = baseline_run_by_key.get((item.scenario_id, int(item.seed)))
+            if baseline_run_id:
+                base_readiness = readiness_rows.get(baseline_run_id, {}).get("readiness_score")
+                base_metrics = metrics_rows.get(baseline_run_id, {})
+                stressed_metrics = metrics_rows.get(run_id, {})
+
+                delta_entry: dict[str, Any] = {
+                    "scenario_id": item.scenario_id,
+                    "seed": int(item.seed),
+                    "stress_profile_id": profile_id,
+                    "baseline_run_id": baseline_run_id,
+                    "stressed_run_id": run_id,
+                }
+
+                if isinstance(score, (int, float)) and isinstance(base_readiness, (int, float)):
+                    delta_entry["delta_readiness_score"] = float(score) - float(base_readiness)
+                for field in ["precision", "recall", "false_positive_rate_per_minute", "detection_delay_seconds", "track_stability_index"]:
+                    a = stressed_metrics.get(field)
+                    b = base_metrics.get(field)
+                    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+                        delta_entry[f"delta_{field}"] = float(a) - float(b)
+                if any(k.startswith("delta_") for k in delta_entry.keys()):
+                    deltas.append(delta_entry)
 
         # Blindspot reasons: pull from metrics frame summaries if available (no overlays).
         metrics_payload = metrics_rows.get(run_id, {})
@@ -222,10 +284,41 @@ def _compute_summary(
     by_scenario = {k: {"count": len(v), "mean": round(mean(v), 3) if v else None, "worst": round(min(v), 3) if v else None} for k, v in readiness_by_scenario.items()}
     by_profile = {k: {"count": len(v), "mean": round(mean(v), 3) if v else None, "worst": round(min(v), 3) if v else None} for k, v in readiness_by_profile.items()}
 
+    # Gate aggregation.
+    gate_overall = Counter(gate_status_by_run.values())
+    gate_summary = {
+        "counts": dict(gate_overall),
+        "pass_rate": round((gate_overall.get("pass", 0) / max(1, sum(gate_overall.values()))), 4) if gate_overall else None,
+        "failed_checks_top": [{"check": k, "count": int(c)} for k, c in gate_failed_checks.most_common(10)],
+        "by_stress_profile": {k: dict(v) for k, v in gate_by_profile.items()},
+    }
+
+    # Delta aggregation.
+    delta_readiness = [d.get("delta_readiness_score") for d in deltas if isinstance(d.get("delta_readiness_score"), (int, float))]
+    deltas_by_profile: dict[str, list[float]] = defaultdict(list)
+    for d in deltas:
+        pid = str(d.get("stress_profile_id") or "unknown")
+        val = d.get("delta_readiness_score")
+        if isinstance(val, (int, float)):
+            deltas_by_profile[pid].append(float(val))
+
+    delta_summary = {
+        "count": len(deltas),
+        "mean_delta_readiness": round(mean(delta_readiness), 3) if delta_readiness else None,
+        "worst_delta_readiness": round(min(delta_readiness), 3) if delta_readiness else None,
+        "by_stress_profile": {k: {"count": len(v), "mean": round(mean(v), 3) if v else None, "worst": round(min(v), 3) if v else None} for k, v in deltas_by_profile.items()},
+        "worst_cases": sorted(
+            [d for d in deltas if isinstance(d.get("delta_readiness_score"), (int, float))],
+            key=lambda x: float(x.get("delta_readiness_score")),  # type: ignore[arg-type]
+        )[:10],
+    }
+
     return {
         "overall": overall,
         "by_scenario": by_scenario,
         "by_stress_profile": by_profile,
+        "gates": gate_summary,
+        "deltas": delta_summary,
         "top_blindspot_reasons": [{"reason": k, "count": int(c)} for k, c in blindspot_reasons.most_common(10)],
         "failures": failures,
     }
@@ -331,4 +424,3 @@ def batch_snapshot(db: Session, batch_id: str) -> dict[str, Any] | None:
         "summary": summary_payload if isinstance(summary_payload, dict) else {},
         "items": out_items,
     }
-

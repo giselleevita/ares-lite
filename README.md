@@ -218,6 +218,37 @@ Expected response (example): `POST /api/run` is **asynchronous** and returns imm
 curl http://127.0.0.1:8000/api/runs/<run_id>
 ```
 
+## Certification Kit (Evidence + Gates + Deltas)
+
+ARES Lite ships an offline-friendly “acceptance kit” for demos and test readiness.
+
+### Evidence Packs (Chain-of-Custody)
+
+- Run evidence pack: `GET /api/runs/{run_id}/evidence.zip`
+- Batch evidence pack: `GET /api/benchmarks/{batch_id}/evidence.zip`
+
+Each ZIP includes a `manifest.json` with SHA256 hashes, environment hints (ffmpeg/sqlite), and warnings if any artifacts were missing. Evidence packs are best-effort and never require external services.
+
+### Policy-as-Code Gates (PASS/FAIL)
+
+- Gate config (defaults): `backend/data/gates.json`
+- Read active config: `GET /api/gates`
+- Update config (local/dev): `POST /api/gates`
+- Evaluate run: `GET /api/runs/{run_id}/gate`
+- Evaluate batch: `GET /api/benchmarks/{batch_id}/gate`
+
+### Delta-First Compare
+
+- Compare runs with a baseline: `POST /api/compare` with `{ run_ids: [...], baseline_run_id: "run_x" }`
+- Response includes per-field `deltas` plus `top_regressions` (worst deltas by directionality).
+
+## Port Overrides (Local + Docker)
+
+If ports `8000` / `5173` are already in use, you can override them:
+
+- Docker: `ARES_BACKEND_PORT=8001 ARES_FRONTEND_PORT=5174 make docker-demo`
+- Docker selftest: `ARES_BACKEND_PORT=8001 ARES_FRONTEND_PORT=5174 make docker-selftest`
+
 Expected:
 - status transitions `queued -> processing -> completed` (or `failed`)
 - progress fields: `stage`, `progress`, `message`
