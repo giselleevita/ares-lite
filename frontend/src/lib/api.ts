@@ -120,6 +120,15 @@ export type BenchmarkBatch = {
   items: Array<BenchmarkItem & { id: number; batch_id: string }>;
 };
 
+export type BenchmarkBatchSummary = {
+  id: string;
+  name: string;
+  status: string;
+  message?: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type CreateBenchmarkRequest = {
   name: string;
   scenarios: string[];
@@ -166,6 +175,14 @@ async function postJson<T>(path: string, payload: unknown): Promise<T> {
     throw new Error(`Request failed: ${response.status}`);
   }
   return (await response.json()) as T;
+}
+
+async function getBlob(path: string): Promise<Blob> {
+  const response = await fetch(withBase(path));
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`);
+  }
+  return await response.blob();
 }
 
 export function getHealth(): Promise<HealthResponse> {
@@ -224,8 +241,17 @@ export function createBenchmark(payload: CreateBenchmarkRequest): Promise<Create
   return postJson<CreateBenchmarkResponse>("/api/benchmarks", payload);
 }
 
+export function listBenchmarkBatches(limit = 25): Promise<{ batches: BenchmarkBatchSummary[] }> {
+  return getJson<{ batches: BenchmarkBatchSummary[] }>(`/api/benchmarks?limit=${limit}`);
+}
+
 export function getBenchmarkBatch(batchId: string): Promise<BenchmarkBatch> {
   return getJson<BenchmarkBatch>(`/api/benchmarks/${batchId}`);
+}
+
+export function downloadBenchmarkCsv(batchId: string): Promise<Blob> {
+  const safeId = encodeURIComponent(batchId);
+  return getBlob(`/api/benchmarks/${safeId}/export.csv`);
 }
 
 export function compareRuns(runIds: string[]): Promise<CompareRunsResponse> {

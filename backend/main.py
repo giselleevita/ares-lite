@@ -32,6 +32,7 @@ from benchmarking.batch import (
     reconcile_batch,
     batch_snapshot,
 )
+from benchmarking.export import export_batch_csv
 
 configure_logging()
 
@@ -272,6 +273,19 @@ def get_benchmark_batch(batch_id: str, db: Session = Depends(get_db)) -> dict[st
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Benchmark batch not found")
     return snapshot
+
+
+@app.get("/api/benchmarks/{batch_id}/export.csv")
+def export_benchmark_batch_csv(batch_id: str, db: Session = Depends(get_db)) -> Response:
+    try:
+        csv_text = export_batch_csv(db, batch_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Benchmark batch not found")
+    return Response(
+        content=csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{batch_id}.csv"'},
+    )
 
 
 class CompareRequest(BaseModel):
