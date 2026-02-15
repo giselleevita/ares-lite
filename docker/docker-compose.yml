@@ -12,7 +12,7 @@ services:
       - ares_runs:/app/backend/data/runs
       - ares_demo:/app/backend/data/demo
     ports:
-      - "8000:8000"
+      - "${ARES_BACKEND_PORT:-8000}:8000"
 
   frontend:
     build:
@@ -21,7 +21,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "5173:80"
+      - "${ARES_FRONTEND_PORT:-5173}:80"
 
 volumes:
   ares_runs:

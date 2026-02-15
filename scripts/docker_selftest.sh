@@ -9,6 +9,9 @@ TIMEOUT_SEC="${TIMEOUT_SEC:-180}"
 POLL_INTERVAL_SEC="${POLL_INTERVAL_SEC:-1}"
 
 UI_BASE="http://127.0.0.1:5173"
+if [[ -n "${ARES_FRONTEND_PORT:-}" ]]; then
+  UI_BASE="http://127.0.0.1:${ARES_FRONTEND_PORT}"
+fi
 
 # Prefer docker on PATH, but fall back to the Docker Desktop embedded binary on macOS.
 DOCKER_BIN="${DOCKER_BIN:-}"

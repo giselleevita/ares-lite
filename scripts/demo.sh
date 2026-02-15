@@ -29,8 +29,10 @@ echo "[demo] Ensuring golden demo assets exist..."
 
 echo ""
 echo "[demo] Starting backend + frontend dev servers..."
-echo "[demo] UI:     http://127.0.0.1:5173"
-echo "[demo] Backend: http://127.0.0.1:8000/health"
+BACKEND_PORT="${ARES_BACKEND_PORT:-8000}"
+FRONTEND_PORT="${ARES_FRONTEND_PORT:-5173}"
+echo "[demo] UI:     http://127.0.0.1:${FRONTEND_PORT}"
+echo "[demo] Backend: http://127.0.0.1:${BACKEND_PORT}/health"
 echo ""
 echo "[demo] Instructions:"
 echo "1) Open the UI URL"
@@ -50,11 +52,11 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cd "$BACKEND_DIR"
-"$VENV_DIR/bin/uvicorn" main:app --reload --host 127.0.0.1 --port 8000 &
+"$VENV_DIR/bin/uvicorn" main:app --reload --host 127.0.0.1 --port "${BACKEND_PORT}" &
 BACKEND_PID=$!
 
 cd "$FRONTEND_DIR"
-npm run dev -- --host 127.0.0.1 --port 5173 &
+VITE_API_BASE="http://127.0.0.1:${BACKEND_PORT}" npm run dev -- --host 127.0.0.1 --port "${FRONTEND_PORT}" &
 FRONTEND_PID=$!
 
 wait "$BACKEND_PID" "$FRONTEND_PID"
