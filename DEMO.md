@@ -11,7 +11,7 @@ In 2 minutes, prove ARES Lite is more than a CV demo: it is an offline, reproduc
 ## Pre-Demo (30s)
 
 ```bash
-cd /Users/yusaf/ARES-lite
+cd .
 make doctor
 ```
 

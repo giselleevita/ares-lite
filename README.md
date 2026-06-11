@@ -13,7 +13,7 @@ Implemented so far:
 ## Repository Layout
 
 ```text
-/Users/yusaf/ARES-lite
+.
 ├── backend
 │   ├── main.py
 │   ├── demo.py
@@ -64,7 +64,7 @@ Implemented so far:
 ## Setup
 
 ```bash
-cd /Users/yusaf/ARES-lite
+cd .
 make setup
 ```
 
@@ -76,14 +76,14 @@ Expected output includes:
 Optional quick sanity check (requires `ffmpeg`):
 
 ```bash
-cd /Users/yusaf/ARES-lite
+cd .
 make selfcheck
 ```
 
 ## Run Development Stack
 
 ```bash
-cd /Users/yusaf/ARES-lite
+cd .
 make dev
 ```
 
@@ -94,7 +94,7 @@ Expected output includes lines similar to:
 ## Doctor (Environment Check)
 
 ```bash
-cd /Users/yusaf/ARES-lite
+cd .
 make doctor
 ```
 
@@ -107,7 +107,7 @@ This prints a copy/paste friendly checklist for:
 ## Run Demo (One Command)
 
 ```bash
-cd /Users/yusaf/ARES-lite
+cd .
 make demo
 ```
 
@@ -123,7 +123,7 @@ Then open `http://127.0.0.1:5173/` and click **Run Demo** (fixed seed, reproduci
 Requirements: Docker Desktop (or Docker Engine) + `docker compose`.
 
 ```bash
-cd /Users/yusaf/ARES-lite
+cd .
 make docker-demo
 ```
 
@@ -142,7 +142,7 @@ Notes:
 This proves the full system works inside Docker: nginx proxy, backend worker, demo assets generation, and run completion.
 
 ```bash
-cd /Users/yusaf/ARES-lite
+cd .
 make docker-selftest
 ```
 
@@ -155,7 +155,7 @@ Controls:
 If you want a quick, synchronous pipeline run without starting the dev stack:
 
 ```bash
-cd /Users/yusaf/ARES-lite/backend
+cd backend
 .venv/bin/python -m demo
 ```
 
@@ -164,7 +164,7 @@ cd /Users/yusaf/ARES-lite/backend
 Generate or refresh dataset assets:
 
 ```bash
-cd /Users/yusaf/ARES-lite
+cd .
 make dataset
 ```
 
@@ -184,7 +184,7 @@ Sanity checks:
 1. Start backend:
 
 ```bash
-cd /Users/yusaf/ARES-lite/backend
+cd backend
 .venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -301,7 +301,7 @@ curl -X POST http://127.0.0.1:8000/api/run \
 ## Docker Compose (Scaffold)
 
 ```bash
-docker compose -f /Users/yusaf/ARES-lite/docker/docker-compose.yml up
+docker compose -f ./docker/docker-compose.yml up
 ```
 
 This is a development scaffold for backend/frontend services only.
