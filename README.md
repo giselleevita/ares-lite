@@ -1,14 +1,22 @@
 # ARES Lite — Counter-UAS Reliability & Engagement Simulator
 
-"Not a drone detector - a battlefield reliability test range that stress-tests detection systems under frontline conditions and outputs an operational readiness score + report."
+**Offline reliability and benchmarking suite for video detection pipelines.**
 
-## Current Scope
+ARES Lite evaluates detector behavior against reproducible, annotated scenarios. It runs
+video ingestion and inference pipelines, records results in SQLite, calculates readiness
+metrics, applies policy-as-code acceptance gates, and exports tamper-evident evidence packs.
 
-Implemented so far:
-- **Phase 1**: full repo scaffold, backend/frontend boot, dev orchestration, canned demo output.
-- **Phase 2**: offline synthetic dataset with ground-truth annotations (2 drone-like clips + 1 clutter clip).
-- **Phase 3**: ingestion + frame pipeline with synchronous `/api/run` execution and SQLite persistence.
-- **Phase 4**: detector interface with YOLOv8n path and automatic motion-based fallback.
+The bundled dataset is synthetic and the output is for engineering evaluation only. It does
+not certify operational safety or replace field validation.
+
+## Engineering Highlights
+
+- Deterministic offline scenarios with ground-truth annotations
+- Asynchronous run queue with cancellation and SQLite persistence
+- YOLO detector path with an automatic motion-detector fallback
+- Reliability breakdowns, readiness scoring, regression comparisons, and CSV exports
+- SHA-256 evidence manifests and policy-as-code pass/fail gates
+- CI matrix across macOS/Linux and Python 3.11/3.12
 
 ## Repository Layout
 
@@ -53,7 +61,7 @@ Implemented so far:
 
 ## Prerequisites
 
-- macOS
+- Linux or macOS
 - Python 3.10+
 - Node.js + npm
 - GNU Make
@@ -159,7 +167,7 @@ cd backend
 .venv/bin/python -m demo
 ```
 
-## Phase 2 Dataset: How to Run + Expected Output
+## Synthetic Dataset: How to Run + Expected Output
 
 Generate or refresh dataset assets:
 
@@ -179,7 +187,7 @@ Sanity checks:
 - each clip is 854x480, 15 FPS, 8 seconds
 - annotation JSONs have frame keys `0..119`
 
-## Phase 3+4 Run Pipeline: How to Run + Expected Output
+## Run Pipeline: How to Run + Expected Output
 
 1. Start backend:
 
@@ -304,7 +312,7 @@ curl -X POST http://127.0.0.1:8000/api/run \
 docker compose -f ./docker/docker-compose.yml up
 ```
 
-This is a development scaffold for backend/frontend services only.
+This Compose stack runs the backend and frontend development services.
 
 ## Notes
 
@@ -313,4 +321,4 @@ This is a development scaffold for backend/frontend services only.
 - If `ffmpeg` is missing, runs will fail with a clear `error_message` visible via `GET /api/runs/{run_id}`.
 - If `ultralytics` is missing, runs continue via motion fallback.
 - Runs are queued in SQLite (the `runs` table) and a local background worker thread claims and executes queued runs.
-- Later phases will wire stress simulation, reliability metrics, engagement simulation, readiness scoring, blind spot explorer, and report generation.
+- The bundled scenarios are synthetic and do not represent field performance.
