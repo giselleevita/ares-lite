@@ -1,5 +1,8 @@
 # ARES Lite — Counter-UAS Reliability & Engagement Simulator
 
+[![Docker demo](https://img.shields.io/badge/demo-docker%20compose-2496ED?style=flat&logo=docker&logoColor=white)](#docker-demo-runs-anywhere)
+[![Private repo](https://img.shields.io/badge/repo-private-lightgrey)](https://github.com/giselleevita/portfolio/blob/main/docs/BADGE_POLICY.md)
+
 **Offline reliability and benchmarking suite for video detection pipelines.**
 
 ARES Lite evaluates detector behavior against reproducible, annotated scenarios. It runs
