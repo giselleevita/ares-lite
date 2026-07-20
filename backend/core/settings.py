@@ -28,6 +28,18 @@ class Settings(BaseSettings):
     run_recover_stale_processing_seconds: int = 6 * 60 * 60  # 6 hours
     run_recover_mode: str = "requeue"  # or "fail"
     cancel_check_every_n_frames: int = 10
+    run_sync_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ARES_RUN_SYNC_ENABLED", "RUN_SYNC_ENABLED"),
+    )
+    api_auth_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ARES_API_AUTH_ENABLED", "API_AUTH_ENABLED"),
+    )
+    api_key_roles_json: str = Field(
+        default="{}",
+        validation_alias=AliasChoices("ARES_API_KEY_ROLES_JSON", "API_KEY_ROLES_JSON"),
+    )
 
     detector_preference: str = "auto"
     yolo_model_path: str = "yolov8n.pt"

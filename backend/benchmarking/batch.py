@@ -4,12 +4,14 @@ import json
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from statistics import mean, median
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from core.ids import new_run_id
 from core.gates import evaluate_gate, load_gates_config
+from core.settings import settings
 from db.models import BenchmarkBatch, BenchmarkItem, Engagement, Metric, Readiness, Run
 from db.runs import safe_json, touch_run
 from pipeline.ingest import get_scenario_or_404
@@ -28,6 +30,60 @@ def _ensure_profile_json(profile: str | dict[str, Any]) -> dict[str, Any]:
     if payload is None:
         raise ValueError(f"Unknown stress profile: {pid}")
     return payload
+
+
+def _resolve_external_predictions_path(raw_path: str) -> Path:
+    path = Path(str(raw_path).strip())
+    if not path.is_absolute():
+        path = Path(settings.data_dir) / path
+    return path
+
+
+def _enqueue_batch_run(
+    db: Session,
+    *,
+    batch_id: str,
+    scenario_id: str,
+    seed: int | None,
+    options: dict[str, Any],
+    stress_profile_json: dict[str, Any],
+    role: str,
+    benchmark_meta: dict[str, Any],
+) -> str:
+    run_id = new_run_id()
+    run_now = _utcnow()
+    run_record = Run(
+        id=run_id,
+        scenario_id=scenario_id,
+        config_json=safe_json(
+            {
+                "options": options,
+                "benchmark": benchmark_meta,
+            }
+        ),
+        status="queued",
+        stage="queued",
+        progress=0,
+        message="Queued",
+        error_message="",
+        queued_at=run_now,
+        updated_at=run_now,
+    )
+    db.add(run_record)
+    db.flush()
+    db.add(
+        BenchmarkItem(
+            batch_id=batch_id,
+            scenario_id=scenario_id,
+            seed=seed,
+            stress_profile_json=safe_json(stress_profile_json),
+            run_id=run_id,
+            status="queued",
+            role=role,
+            created_at=run_now,
+        )
+    )
+    return run_id
 
 
 def create_benchmark_batch(
@@ -88,44 +144,136 @@ def create_benchmark_batch(
                 else:
                     options.setdefault("disable_stress", False)
 
-                run_id = new_run_id()
-                run_now = _utcnow()
-                run_record = Run(
-                    id=run_id,
+                _enqueue_batch_run(
+                    db,
+                    batch_id=batch_id,
                     scenario_id=scenario_id,
-                    config_json=safe_json(
-                        {
-                            "options": options,
-                            "benchmark": {
-                                "batch_id": batch_id,
-                                "seed": seed,
-                                "stress_profile": profile_json,
-                                "role": role,
-                                "created_at": run_now.isoformat(),
-                            },
-                        }
-                    ),
-                    status="queued",
-                    stage="queued",
-                    progress=0,
-                    message="Queued",
-                    error_message="",
-                    queued_at=run_now,
-                    updated_at=run_now,
+                    seed=int(seed),
+                    options=options,
+                    stress_profile_json=profile_json,
+                    role=role,
+                    benchmark_meta={
+                        "batch_id": batch_id,
+                        "seed": seed,
+                        "stress_profile": profile_json,
+                        "role": role,
+                    },
                 )
-                db.add(run_record)
-                db.flush()
-                db.add(
-                    BenchmarkItem(
-                        batch_id=batch_id,
-                        scenario_id=scenario_id,
-                        seed=seed,
-                        stress_profile_json=safe_json(profile_json),
-                        run_id=run_id,
-                        status="queued",
-                        role=role,
-                        created_at=run_now,
-                    )
+                item_count += 1
+
+    db.commit()
+    return batch_id, item_count
+
+
+def create_external_benchmark_batch(
+    db: Session,
+    *,
+    name: str,
+    scenarios: list[str],
+    external_models: list[dict[str, Any]],
+    seeds: list[int],
+    run_options_overrides: dict[str, Any],
+    include_internal_baseline: bool = True,
+    validate_scenarios: bool = True,
+    validate_prediction_paths: bool = True,
+) -> tuple[str, int]:
+    """Create a benchmark batch from externally generated detector predictions."""
+    if validate_scenarios:
+        for sid in scenarios:
+            get_scenario_or_404(sid)
+
+    normalized_models: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    for idx, model in enumerate(external_models):
+        if not isinstance(model, dict):
+            raise ValueError(f"external_models[{idx}] must be an object")
+        model_id = str(model.get("id") or "").strip()
+        predictions_path = str(model.get("predictions_path") or "").strip()
+        model_name = str(model.get("name") or model_id).strip()
+        if not model_id:
+            raise ValueError(f"external_models[{idx}].id is required")
+        if model_id in seen_ids:
+            raise ValueError(f"Duplicate external model id: {model_id}")
+        if not predictions_path:
+            raise ValueError(f"external_models[{idx}].predictions_path is required")
+        if validate_prediction_paths:
+            resolved = _resolve_external_predictions_path(predictions_path)
+            if not resolved.exists():
+                raise ValueError(f"external_models[{idx}] predictions file not found: {resolved}")
+        normalized_models.append({"id": model_id, "name": model_name or model_id, "predictions_path": predictions_path})
+        seen_ids.add(model_id)
+
+    batch_id = f"batch_{new_run_id()}"
+    now = _utcnow()
+    batch = BenchmarkBatch(
+        id=batch_id,
+        name=name or "External Detector Benchmark",
+        created_at=now,
+        updated_at=now,
+        status="queued",
+        message="Queued",
+        config_json=safe_json(
+            {
+                "mode": "external_models",
+                "scenarios": scenarios,
+                "external_models": normalized_models,
+                "seeds": seeds,
+                "include_internal_baseline": bool(include_internal_baseline),
+                "run_options_overrides": run_options_overrides,
+            }
+        ),
+        summary_json="{}",
+    )
+    db.add(batch)
+    db.flush()
+
+    item_count = 0
+    for scenario_id in scenarios:
+        for seed in seeds:
+            if include_internal_baseline:
+                base_options = dict(run_options_overrides or {})
+                base_options["seed"] = int(seed)
+                _enqueue_batch_run(
+                    db,
+                    batch_id=batch_id,
+                    scenario_id=scenario_id,
+                    seed=int(seed),
+                    options=base_options,
+                    stress_profile_json={"id": "internal:baseline", "name": "Internal Baseline", "type": "internal_model"},
+                    role="baseline",
+                    benchmark_meta={
+                        "batch_id": batch_id,
+                        "seed": seed,
+                        "external_model_id": None,
+                        "role": "baseline",
+                    },
+                )
+                item_count += 1
+
+            for model in normalized_models:
+                options = dict(run_options_overrides or {})
+                options["seed"] = int(seed)
+                options["external_predictions_path"] = model["predictions_path"]
+                profile_json = {
+                    "id": f"external:{model['id']}",
+                    "name": model["name"],
+                    "type": "external_model",
+                    "predictions_path": model["predictions_path"],
+                }
+                _enqueue_batch_run(
+                    db,
+                    batch_id=batch_id,
+                    scenario_id=scenario_id,
+                    seed=int(seed),
+                    options=options,
+                    stress_profile_json=profile_json,
+                    role="stressed",
+                    benchmark_meta={
+                        "batch_id": batch_id,
+                        "seed": seed,
+                        "external_model_id": model["id"],
+                        "role": "stressed",
+                    },
                 )
                 item_count += 1
 
@@ -423,4 +571,154 @@ def batch_snapshot(db: Session, batch_id: str) -> dict[str, Any] | None:
         "config": config_payload if isinstance(config_payload, dict) else {},
         "summary": summary_payload if isinstance(summary_payload, dict) else {},
         "items": out_items,
+    }
+
+
+def batch_scorecard(db: Session, batch_id: str) -> dict[str, Any]:
+    """Compute comparative per-model scorecards for a benchmark batch."""
+    batch = db.query(BenchmarkBatch).filter(BenchmarkBatch.id == batch_id).first()
+    if batch is None:
+        raise ValueError("Benchmark batch not found")
+
+    items = db.query(BenchmarkItem).filter(BenchmarkItem.batch_id == batch_id).order_by(BenchmarkItem.id.asc()).all()
+    run_ids = [item.run_id for item in items if item.run_id]
+    runs_by_id = {r.id: r for r in db.query(Run).filter(Run.id.in_(run_ids)).all()} if run_ids else {}
+    metrics_rows = {m.run_id: _load_json_row(m, "metrics_json") for m in db.query(Metric).filter(Metric.run_id.in_(run_ids)).all()} if run_ids else {}
+    readiness_rows = {r.run_id: _load_json_row(r, "readiness_json") for r in db.query(Readiness).filter(Readiness.run_id.in_(run_ids)).all()} if run_ids else {}
+    engagement_rows = {e.run_id: _load_json_row(e, "engagement_json") for e in db.query(Engagement).filter(Engagement.run_id.in_(run_ids)).all()} if run_ids else {}
+
+    gates_config = load_gates_config()
+    rows: list[dict[str, Any]] = []
+    baseline_by_key: dict[tuple[str, int], dict[str, Any]] = {}
+
+    for item in items:
+        if not item.run_id:
+            continue
+        run = runs_by_id.get(item.run_id)
+        if run is None:
+            continue
+
+        try:
+            profile = json.loads(item.stress_profile_json or "{}")
+        except Exception:
+            profile = {}
+
+        model_id = "internal:baseline" if item.role == "baseline" else str(profile.get("id") or "unknown")
+        model_name = "Internal Baseline" if item.role == "baseline" else str(profile.get("name") or model_id)
+        status = str(getattr(run, "status", "queued"))
+
+        metrics_payload = metrics_rows.get(item.run_id, {})
+        readiness_payload = readiness_rows.get(item.run_id, {})
+        gate_status = "unknown"
+        if status in {"completed", "failed", "cancelled"}:
+            gate_payload = evaluate_gate(
+                run={"id": run.id, "scenario_id": item.scenario_id, "status": status},
+                metrics=metrics_payload,
+                readiness=readiness_payload,
+                engagement=engagement_rows.get(item.run_id, {}),
+                baseline_missing=bool(metrics_payload.get("baseline_missing", False)),
+                gates_config=gates_config,
+            )
+            gate_status = str(gate_payload.get("status", "unknown"))
+
+        row = {
+            "run_id": run.id,
+            "scenario_id": item.scenario_id,
+            "seed": int(item.seed) if item.seed is not None else None,
+            "model_id": model_id,
+            "model_name": model_name,
+            "role": item.role,
+            "status": status,
+            "gate_status": gate_status,
+            "readiness_score": readiness_payload.get("readiness_score"),
+            "precision": metrics_payload.get("precision"),
+            "recall": metrics_payload.get("recall"),
+            "false_positive_rate_per_minute": metrics_payload.get("false_positive_rate_per_minute"),
+            "detection_delay_seconds": metrics_payload.get("detection_delay_seconds"),
+            "track_stability_index": metrics_payload.get("track_stability_index"),
+        }
+        rows.append(row)
+
+        if item.role == "baseline" and row["seed"] is not None:
+            baseline_by_key[(item.scenario_id, int(row["seed"]))] = row
+
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row["model_id"])].append(row)
+
+    def _mean_num(values: list[Any]) -> float | None:
+        nums = [float(v) for v in values if isinstance(v, (int, float))]
+        return round(mean(nums), 4) if nums else None
+
+    model_rows: list[dict[str, Any]] = []
+    for model_id, model_items in grouped.items():
+        terminal = [r for r in model_items if r.get("status") in {"completed", "failed", "cancelled"}]
+        completed = [r for r in model_items if r.get("status") == "completed"]
+
+        delta_readiness: list[float] = []
+        delta_precision: list[float] = []
+        delta_recall: list[float] = []
+        delta_fp: list[float] = []
+        delta_delay: list[float] = []
+        delta_stability: list[float] = []
+
+        for r in completed:
+            seed = r.get("seed")
+            if seed is None:
+                continue
+            base = baseline_by_key.get((str(r["scenario_id"]), int(seed)))
+            if not base or model_id == "internal:baseline":
+                continue
+
+            def _append_delta(dst: list[float], key: str) -> None:
+                a = r.get(key)
+                b = base.get(key)
+                if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+                    dst.append(float(a) - float(b))
+
+            _append_delta(delta_readiness, "readiness_score")
+            _append_delta(delta_precision, "precision")
+            _append_delta(delta_recall, "recall")
+            _append_delta(delta_fp, "false_positive_rate_per_minute")
+            _append_delta(delta_delay, "detection_delay_seconds")
+            _append_delta(delta_stability, "track_stability_index")
+
+        passes = sum(1 for r in terminal if r.get("gate_status") == "pass")
+        model_rows.append(
+            {
+                "model_id": model_id,
+                "model_name": str(model_items[0].get("model_name") or model_id),
+                "runs_total": len(model_items),
+                "runs_terminal": len(terminal),
+                "runs_completed": len(completed),
+                "gate_pass_rate": round(passes / len(terminal), 4) if terminal else None,
+                "mean_readiness_score": _mean_num([r.get("readiness_score") for r in completed]),
+                "mean_precision": _mean_num([r.get("precision") for r in completed]),
+                "mean_recall": _mean_num([r.get("recall") for r in completed]),
+                "mean_false_positive_rate_per_minute": _mean_num([r.get("false_positive_rate_per_minute") for r in completed]),
+                "mean_detection_delay_seconds": _mean_num([r.get("detection_delay_seconds") for r in completed]),
+                "mean_track_stability_index": _mean_num([r.get("track_stability_index") for r in completed]),
+                "mean_delta_readiness_vs_baseline": _mean_num(delta_readiness),
+                "mean_delta_precision_vs_baseline": _mean_num(delta_precision),
+                "mean_delta_recall_vs_baseline": _mean_num(delta_recall),
+                "mean_delta_fp_rate_vs_baseline": _mean_num(delta_fp),
+                "mean_delta_delay_vs_baseline": _mean_num(delta_delay),
+                "mean_delta_stability_vs_baseline": _mean_num(delta_stability),
+            }
+        )
+
+    # Baseline first, then highest readiness.
+    model_rows = sorted(
+        model_rows,
+        key=lambda r: (
+            0 if str(r.get("model_id")) == "internal:baseline" else 1,
+            -(float(r.get("mean_readiness_score")) if isinstance(r.get("mean_readiness_score"), (int, float)) else -1.0),
+        ),
+    )
+
+    return {
+        "batch_id": batch_id,
+        "models": model_rows,
+        "rows_evaluated": len(rows),
+        "baseline_model_id": "internal:baseline",
     }

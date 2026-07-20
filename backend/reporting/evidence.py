@@ -93,6 +93,20 @@ def _run_dir(run_id: str) -> Path:
     return Path(settings.runs_dir) / run_id
 
 
+def _frame_index_to_sequence_map(meta: dict[str, Any]) -> dict[int, int]:
+    """Map original frame indices to extracted frame sequence numbers (1-based)."""
+    raw = meta.get("frame_indices")
+    if not isinstance(raw, list):
+        return {}
+    out: dict[int, int] = {}
+    for idx, value in enumerate(raw, start=1):
+        try:
+            out[int(value)] = idx
+        except Exception:
+            continue
+    return out
+
+
 def build_run_evidence_pack(
     db: Session,
     *,
@@ -123,6 +137,7 @@ def build_run_evidence_pack(
 
     meta = _load_json_file(run_dir / "run_metadata.json") or {}
     baseline_missing = bool(metrics_payload.get("baseline_missing", meta.get("reliability_metrics", {}).get("baseline_missing", False)))
+    frame_to_sequence = _frame_index_to_sequence_map(meta)
 
     gates_config = load_gates_config()
     gate_payload = evaluate_gate(
@@ -185,7 +200,15 @@ def build_run_evidence_pack(
 
             # Prefer stressed frame; fall back to extracted frame.
             stressed_path = run_dir / "stressed" / f"frame_{frame_idx:06d}.jpg"
-            frame_path = stressed_path if stressed_path.exists() else (run_dir / "frames" / f"frame_{frame_idx:06d}.jpg")
+            frame_path = stressed_path
+            if not frame_path.exists():
+                seq = frame_to_sequence.get(frame_idx)
+                candidate_paths: list[Path] = []
+                if seq is not None:
+                    candidate_paths.append(run_dir / "frames" / f"frame_{seq:06d}.jpg")
+                # Legacy fallback in case frames are already named by original frame index.
+                candidate_paths.append(run_dir / "frames" / f"frame_{frame_idx:06d}.jpg")
+                frame_path = next((p for p in candidate_paths if p.exists()), candidate_paths[0])
             if not frame_path.exists():
                 warnings.append(f"blindspot frame missing: {frame_path.name}")
                 continue
@@ -410,4 +433,3 @@ def _item_to_dict(item: BenchmarkItem) -> dict[str, Any]:
         "stress_profile": _loads_json(item.stress_profile_json),
         "created_at": item.created_at.isoformat() if item.created_at else None,
     }
-
