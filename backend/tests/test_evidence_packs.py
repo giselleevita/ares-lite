@@ -94,3 +94,74 @@ def test_batch_evidence_pack_contains_export_and_manifest(tmp_path) -> None:
     finally:
         settings.runs_dir = old_runs_dir
         settings.data_dir = old_data_dir
+
+
+def test_run_evidence_pack_maps_blindspots_to_extracted_sequence_frames(tmp_path) -> None:
+    """When stressed frames are absent, evidence should map by sampled sequence index."""
+    old_runs_dir = settings.runs_dir
+    old_data_dir = settings.data_dir
+    try:
+        settings.runs_dir = tmp_path / "runs"
+        settings.data_dir = tmp_path / "data"
+        settings.runs_dir.mkdir(parents=True, exist_ok=True)
+        settings.data_dir.mkdir(parents=True, exist_ok=True)
+
+        engine = _make_engine(tmp_path)
+        SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+        now = datetime.now(timezone.utc)
+        run_id = "run_seq_map"
+
+        with SessionLocal() as db:  # type: ignore[arg-type]
+            db.add(
+                Run(
+                    id=run_id,
+                    scenario_id="urban_dusk",
+                    status="completed",
+                    stage="completed",
+                    progress=100,
+                    message="",
+                    error_message="",
+                    config_json="{}",
+                    created_at=now,
+                    updated_at=now,
+                    queued_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+            db.commit()
+
+            run_dir = Path(settings.runs_dir) / run_id
+            frames_dir = run_dir / "frames"
+            frames_dir.mkdir(parents=True, exist_ok=True)
+            # ffmpeg extraction naming is sequence-based: frame_000001, frame_000002, ...
+            (frames_dir / "frame_000001.jpg").write_bytes(b"frame-a")
+            (frames_dir / "frame_000003.jpg").write_bytes(b"frame-c")
+            (run_dir / "run_metadata.json").write_text(
+                json.dumps(
+                    {
+                        "frame_indices": [0, 2, 4],
+                        "blindspots": [
+                            {"frame_idx": 0, "reason_tags": ["missing_detection"]},
+                            {"frame_idx": 4, "reason_tags": ["low_light"]},
+                        ],
+                        "config_envelope": {"scenario_snapshot": {}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            out = build_run_evidence_pack(db, run_id=run_id, include_frames=True)
+            assert out.exists()
+
+            with ZipFile(out) as zf:
+                manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+                warnings = manifest.get("warnings", [])
+                assert not any(str(w).startswith("blindspot frame missing:") for w in warnings)
+                names = set(zf.namelist())
+                # Arc names remain keyed by original frame_idx for traceability.
+                assert "blindspots/frame_000000.jpg" in names
+                assert "blindspots/frame_000004.jpg" in names
+    finally:
+        settings.runs_dir = old_runs_dir
+        settings.data_dir = old_data_dir

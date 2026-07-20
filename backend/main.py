@@ -14,6 +14,7 @@ from core.logging import configure_logging
 from core.settings import settings
 from core.diagnostics import collect_health_diagnostics
 from core.gates import evaluate_gate, load_gates_config, save_gates_config
+from core.auth import require_role
 from db.models import Engagement, Metric, Readiness, Run
 from db.session import get_db, init_db
 from pipeline.job_queue import start_worker, worker_status
@@ -29,9 +30,11 @@ from pipeline.orchestrator import enqueue_run_request, execute_run_sync
 from benchmarking.profiles import list_stress_profiles
 from benchmarking.batch import (
     create_benchmark_batch,
+    create_external_benchmark_batch,
     list_batches,
     reconcile_batch,
     batch_snapshot,
+    batch_scorecard,
 )
 from benchmarking.export import export_batch_csv
 from reporting.evidence import build_batch_evidence_pack, build_run_evidence_pack, evaluate_batch_gate
@@ -59,6 +62,7 @@ class RunOptions(BaseModel):
     disable_stress: bool = False
     persist_stressed_frames: bool = False
     stress_profile_id: str | None = None
+    external_predictions_path: str | None = None
 
 
 class RunRequest(BaseModel):
@@ -76,6 +80,16 @@ class RunResponse(BaseModel):
     detector_backend: str
     inference_seconds: float
     fallback_reason: str | None = None
+
+
+def _loads_dict(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        payload = json.loads(value)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _load_run_or_404(db: Session, run_id: str) -> Run:
@@ -233,7 +247,7 @@ def get_gates() -> dict[str, Any]:
 
 
 @app.post("/api/gates")
-def set_gates(payload: dict[str, Any]) -> dict[str, Any]:
+def set_gates(payload: dict[str, Any], _: None = Depends(require_role("admin"))) -> dict[str, Any]:
     try:
         save_gates_config(payload)
     except ValueError as exc:
@@ -250,8 +264,27 @@ class BenchmarkRequest(BaseModel):
     run_options_overrides: dict[str, Any] = Field(default_factory=lambda: {"resize": 320, "every_n_frames": 1, "max_frames": 60})
 
 
+class ExternalModelRequest(BaseModel):
+    id: str
+    predictions_path: str
+    name: str | None = None
+
+
+class ExternalBenchmarkRequest(BaseModel):
+    name: str = "External Detector Benchmark"
+    scenarios: list[str] = Field(default_factory=list, min_length=1)
+    external_models: list[ExternalModelRequest] = Field(default_factory=list, min_length=1)
+    seeds: list[int] = Field(default_factory=lambda: [12345], min_length=1)
+    include_internal_baseline: bool = True
+    run_options_overrides: dict[str, Any] = Field(default_factory=lambda: {"resize": 320, "every_n_frames": 1, "max_frames": 60})
+
+
 @app.post("/api/benchmarks")
-def create_benchmark(payload: BenchmarkRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+def create_benchmark(
+    payload: BenchmarkRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_role("operator")),
+) -> dict[str, Any]:
     batch_id, item_count = create_benchmark_batch(
         db=db,
         name=payload.name,
@@ -261,6 +294,29 @@ def create_benchmark(payload: BenchmarkRequest, db: Session = Depends(get_db)) -
         run_options_overrides=payload.run_options_overrides,
         validate_scenarios=True,
     )
+    return {"batch_id": batch_id, "item_count": item_count}
+
+
+@app.post("/api/benchmarks/external")
+def create_external_benchmark(
+    payload: ExternalBenchmarkRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_role("operator")),
+) -> dict[str, Any]:
+    try:
+        batch_id, item_count = create_external_benchmark_batch(
+            db=db,
+            name=payload.name,
+            scenarios=payload.scenarios,
+            external_models=[m.model_dump() for m in payload.external_models],
+            seeds=payload.seeds,
+            run_options_overrides=payload.run_options_overrides,
+            include_internal_baseline=payload.include_internal_baseline,
+            validate_scenarios=True,
+            validate_prediction_paths=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     return {"batch_id": batch_id, "item_count": item_count}
 
 
@@ -291,6 +347,16 @@ def get_benchmark_batch(batch_id: str, db: Session = Depends(get_db)) -> dict[st
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Benchmark batch not found")
     return snapshot
+
+
+@app.get("/api/benchmarks/{batch_id}/scorecard")
+def get_benchmark_scorecard(batch_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    # Keep statuses fresh before scoring.
+    reconcile_batch(db, batch_id)
+    try:
+        return batch_scorecard(db, batch_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Benchmark batch not found")
 
 
 @app.get("/api/benchmarks/{batch_id}/export.csv")
@@ -482,7 +548,11 @@ def list_runs(limit: int = 25, db: Session = Depends(get_db)) -> dict[str, Any]:
 
 
 @app.post("/api/run", response_model=RunResponse)
-def run_scenario(payload: RunRequest, db: Session = Depends(get_db)) -> RunResponse:
+def run_scenario(
+    payload: RunRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_role("operator")),
+) -> RunResponse:
     run_id = enqueue_run_request(
         db=db,
         scenario_id=payload.scenario_id,
@@ -504,8 +574,15 @@ def run_scenario(payload: RunRequest, db: Session = Depends(get_db)) -> RunRespo
 
 
 @app.post("/api/run/sync", response_model=RunResponse)
-def run_scenario_sync(payload: RunRequest, db: Session = Depends(get_db)) -> RunResponse:
+def run_scenario_sync(
+    payload: RunRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_role("admin")),
+) -> RunResponse:
     """Debug/demo endpoint that executes synchronously in the request thread."""
+    if settings.env.lower() not in {"dev", "test"} and not bool(settings.run_sync_enabled):
+        raise HTTPException(status_code=404, detail="Not found")
+
     result = execute_run_sync(db=db, scenario_id=payload.scenario_id, options=payload.options.model_dump())
     return RunResponse(
         run_id=result["run_id"],
@@ -539,7 +616,7 @@ def get_run(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
         "progress": getattr(run_record, "progress", 0),
         "message": getattr(run_record, "message", ""),
         "error_message": getattr(run_record, "error_message", ""),
-        "config": json.loads(run_record.config_json),
+        "config": _loads_dict(run_record.config_json),
     }
 
 
@@ -592,7 +669,11 @@ def get_run_evidence(run_id: str, include_frames: bool = True, db: Session = Dep
 
 
 @app.post("/api/runs/{run_id}/cancel")
-def cancel_run(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+def cancel_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_role("operator")),
+) -> dict[str, Any]:
     run_record = _load_run_or_404(db, run_id)
 
     status = str(run_record.status)
@@ -637,7 +718,7 @@ def get_run_metrics(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any
         raise HTTPException(status_code=404, detail="Metrics not found for run")
     return {
         "run_id": run_id,
-        "metrics": json.loads(metric_record.metrics_json),
+        "metrics": _loads_dict(metric_record.metrics_json),
     }
 
 
@@ -648,7 +729,7 @@ def get_run_engagement(run_id: str, db: Session = Depends(get_db)) -> dict[str, 
         raise HTTPException(status_code=404, detail="Engagement results not found for run")
     return {
         "run_id": run_id,
-        "engagement": json.loads(engagement_record.engagement_json),
+        "engagement": _loads_dict(engagement_record.engagement_json),
     }
 
 
@@ -659,7 +740,7 @@ def get_run_readiness(run_id: str, db: Session = Depends(get_db)) -> dict[str, A
         raise HTTPException(status_code=404, detail="Readiness results not found for run")
     return {
         "run_id": run_id,
-        "readiness": json.loads(readiness_record.readiness_json),
+        "readiness": _loads_dict(readiness_record.readiness_json),
     }
 
 
@@ -670,7 +751,7 @@ def get_run_blindspots(run_id: str, db: Session = Depends(get_db)) -> dict[str, 
     if metric_record is None:
         raise HTTPException(status_code=404, detail="Metrics not found for run")
 
-    metrics_payload = json.loads(metric_record.metrics_json)
+    metrics_payload = _loads_dict(metric_record.metrics_json)
     frame_indices = metrics_payload.get("false_negative_frames", {}).get("frames", [])
     config_payload = _load_run_config(run_record)
     stressors = config_payload.get("scenario_snapshot", {}).get("stressors", [])

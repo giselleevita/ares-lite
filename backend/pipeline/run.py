@@ -27,10 +27,90 @@ from metrics.reliability import (
 from metrics.readiness import compute_readiness, upsert_readiness
 from pipeline.blindspots import get_reason_tags
 from pipeline.frames import FrameExtractionError, extract_sampled_frames
-from pipeline.inference import run_inference
+from pipeline.inference import DetectorResult, run_inference
 from reporting.report import generate_run_report
 from simulation.stressors import StressApplier, StressedFrame
 from benchmarking.profiles import get_stress_profile
+
+
+def _resolve_external_predictions_path(raw_value: Any) -> Path | None:
+    if raw_value is None:
+        return None
+    text = str(raw_value).strip()
+    if not text:
+        return None
+    candidate = Path(text)
+    if not candidate.is_absolute():
+        candidate = Path(settings.data_dir) / candidate
+    return candidate
+
+
+def _load_external_detector_result(
+    predictions_path: Path,
+    *,
+    frame_indices: list[int],
+) -> DetectorResult:
+    if not predictions_path.exists():
+        raise HTTPException(status_code=422, detail=f"external_predictions_path not found: {predictions_path}")
+
+    try:
+        payload = json.loads(predictions_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid predictions JSON: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Predictions JSON must be an object")
+
+    backend = "external"
+    backend_hint = payload.get("backend")
+    if isinstance(backend_hint, str) and backend_hint.strip():
+        backend = f"external:{backend_hint.strip()[:64]}"
+
+    # Format A: sequence-aligned list, same order as sampled/stressed frame_indices.
+    frame_boxes_raw = payload.get("frame_boxes")
+    if frame_boxes_raw is not None:
+        if not isinstance(frame_boxes_raw, list):
+            raise HTTPException(status_code=422, detail="frame_boxes must be a list")
+        if len(frame_boxes_raw) != len(frame_indices):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "frame_boxes length mismatch: "
+                    f"expected {len(frame_indices)}, got {len(frame_boxes_raw)}"
+                ),
+            )
+        out_boxes: list[list[dict[str, Any]]] = []
+        for idx, item in enumerate(frame_boxes_raw):
+            if not isinstance(item, list):
+                raise HTTPException(status_code=422, detail=f"frame_boxes[{idx}] must be a list")
+            out_boxes.append(item)
+        return DetectorResult(backend=backend, frame_boxes=out_boxes, inference_seconds=0.0, fallback_reason=None)
+
+    # Format B: mapping by original frame index.
+    mapping: Any = payload.get("detections_by_frame")
+    if mapping is None:
+        # Also accept a top-level mapping: {"0": [...], "2": [...]}
+        looks_like_mapping = bool(payload) and all(isinstance(k, str) for k in payload.keys()) and all(
+            isinstance(v, list) for v in payload.values()
+        )
+        mapping = payload if looks_like_mapping else None
+
+    if isinstance(mapping, dict):
+        out_boxes = []
+        for frame_idx in frame_indices:
+            boxes = mapping.get(str(int(frame_idx)), [])
+            if not isinstance(boxes, list):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"detections_by_frame['{int(frame_idx)}'] must be a list",
+                )
+            out_boxes.append(boxes)
+        return DetectorResult(backend=backend, frame_boxes=out_boxes, inference_seconds=0.0, fallback_reason=None)
+
+    raise HTTPException(
+        status_code=422,
+        detail="Predictions JSON must contain frame_boxes[] or detections_by_frame{}",
+    )
 
 
 def process_run(
@@ -162,10 +242,19 @@ def process_run(
     if is_cancel_requested(db, run_id):
         raise CancelledRun("Cancelled")
 
-    touch_run(db, run_id, stage="inference", progress=45, message="Running detector inference")
+    external_predictions_path = _resolve_external_predictions_path(options.get("external_predictions_path"))
+    inference_message = "Loading external detections" if external_predictions_path is not None else "Running detector inference"
+    touch_run(db, run_id, stage="inference", progress=45, message=inference_message)
     db.commit()
 
-    detector_result = run_inference(inference_frame_paths)
+    if external_predictions_path is not None:
+        detector_result = _load_external_detector_result(
+            external_predictions_path,
+            frame_indices=inference_frame_indices,
+        )
+    else:
+        detector_result = run_inference(inference_frame_paths)
+
     if len(detector_result.frame_boxes) != len(inference_frame_indices):
         raise HTTPException(
             status_code=500,
@@ -254,6 +343,7 @@ def process_run(
         "detector_backend": detector_result.backend,
         "baseline_key": baseline_key,
         "persist_stressed_frames": persist_stressed_frames,
+        "external_predictions_path": str(external_predictions_path) if external_predictions_path else None,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 

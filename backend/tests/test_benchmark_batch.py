@@ -6,8 +6,9 @@ from datetime import datetime, timezone
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
-from benchmarking.batch import create_benchmark_batch, reconcile_batch
+from benchmarking.batch import create_benchmark_batch, create_external_benchmark_batch, reconcile_batch, batch_scorecard
 from db.models import Base, BenchmarkBatch, BenchmarkItem, Engagement, Metric, Readiness, Run
+from core.settings import settings
 
 
 def _make_engine(tmp_path) -> object:
@@ -115,3 +116,162 @@ def test_reconcile_batch_computes_summary_when_terminal(tmp_path) -> None:
         assert summary["overall"]["mean_readiness"] is not None
         assert summary["overall"]["worst_readiness"] == 60.0
 
+
+def test_create_external_benchmark_batch_creates_baseline_and_model_runs(tmp_path) -> None:
+    engine = _make_engine(tmp_path)
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    old_data_dir = settings.data_dir
+    try:
+        settings.data_dir = tmp_path / "data"
+        (settings.data_dir / "predictions").mkdir(parents=True, exist_ok=True)
+        (settings.data_dir / "predictions" / "m1.json").write_text("{}", encoding="utf-8")
+        (settings.data_dir / "predictions" / "m2.json").write_text("{}", encoding="utf-8")
+
+        with SessionLocal() as db:  # type: ignore[arg-type]
+            batch_id, item_count = create_external_benchmark_batch(
+                db=db,
+                name="ext",
+                scenarios=["urban_dusk"],
+                external_models=[
+                    {"id": "m1", "predictions_path": "predictions/m1.json"},
+                    {"id": "m2", "predictions_path": "predictions/m2.json"},
+                ],
+                seeds=[7],
+                run_options_overrides={"resize": 320, "every_n_frames": 1, "max_frames": 10},
+                include_internal_baseline=True,
+                validate_scenarios=False,
+                validate_prediction_paths=True,
+            )
+
+            assert item_count == 3
+            items = db.query(BenchmarkItem).filter(BenchmarkItem.batch_id == batch_id).all()
+            assert len(items) == 3
+            roles = {item.role for item in items}
+            assert roles == {"baseline", "stressed"}
+
+            stressed = [item for item in items if item.role == "stressed"]
+            run_ids = [item.run_id for item in stressed if item.run_id]
+            runs = db.query(Run).filter(Run.id.in_(run_ids)).all()
+            assert len(runs) == 2
+            for run in runs:
+                cfg = json.loads(run.config_json)
+                options = cfg.get("options", {})
+                assert options.get("external_predictions_path") in {"predictions/m1.json", "predictions/m2.json"}
+    finally:
+        settings.data_dir = old_data_dir
+
+
+def test_batch_scorecard_computes_model_deltas(tmp_path) -> None:
+    engine = _make_engine(tmp_path)
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:  # type: ignore[arg-type]
+        db.add(BenchmarkBatch(id="batch_sc", name="score", created_at=now, updated_at=now, status="completed", message="", config_json="{}", summary_json="{}"))
+
+        # Baseline run
+        db.add(
+            Run(
+                id="run_base",
+                scenario_id="urban_dusk",
+                status="completed",
+                stage="completed",
+                progress=100,
+                message="Completed",
+                error_message="",
+                config_json="{}",
+                created_at=now,
+                updated_at=now,
+                queued_at=now,
+                started_at=now,
+                finished_at=now,
+            )
+        )
+        db.add(
+            BenchmarkItem(
+                batch_id="batch_sc",
+                scenario_id="urban_dusk",
+                seed=1,
+                stress_profile_json=json.dumps({"id": "internal:baseline", "name": "Internal Baseline"}),
+                run_id="run_base",
+                status="completed",
+                role="baseline",
+                created_at=now,
+            )
+        )
+        db.add(
+            Metric(
+                run_id="run_base",
+                metrics_json=json.dumps(
+                    {
+                        "precision": 0.9,
+                        "recall": 0.85,
+                        "false_positive_rate_per_minute": 0.2,
+                        "detection_delay_seconds": 0.7,
+                        "track_stability_index": 0.8,
+                        "baseline_missing": False,
+                    }
+                ),
+            )
+        )
+        db.add(Readiness(run_id="run_base", readiness_json=json.dumps({"readiness_score": 88.0})))
+        db.add(Engagement(run_id="run_base", engagement_json=json.dumps({"engagement_success_rate": 0.7})))
+
+        # External model run
+        db.add(
+            Run(
+                id="run_ext",
+                scenario_id="urban_dusk",
+                status="completed",
+                stage="completed",
+                progress=100,
+                message="Completed",
+                error_message="",
+                config_json="{}",
+                created_at=now,
+                updated_at=now,
+                queued_at=now,
+                started_at=now,
+                finished_at=now,
+            )
+        )
+        db.add(
+            BenchmarkItem(
+                batch_id="batch_sc",
+                scenario_id="urban_dusk",
+                seed=1,
+                stress_profile_json=json.dumps({"id": "external:model_a", "name": "Model A"}),
+                run_id="run_ext",
+                status="completed",
+                role="stressed",
+                created_at=now,
+            )
+        )
+        db.add(
+            Metric(
+                run_id="run_ext",
+                metrics_json=json.dumps(
+                    {
+                        "precision": 0.7,
+                        "recall": 0.6,
+                        "false_positive_rate_per_minute": 0.6,
+                        "detection_delay_seconds": 1.2,
+                        "track_stability_index": 0.5,
+                        "baseline_missing": False,
+                    }
+                ),
+            )
+        )
+        db.add(Readiness(run_id="run_ext", readiness_json=json.dumps({"readiness_score": 66.0})))
+        db.add(Engagement(run_id="run_ext", engagement_json=json.dumps({"engagement_success_rate": 0.5})))
+        db.commit()
+
+        scorecard = batch_scorecard(db, "batch_sc")
+        assert scorecard["batch_id"] == "batch_sc"
+        models = {row["model_id"]: row for row in scorecard["models"]}
+        assert "internal:baseline" in models
+        assert "external:model_a" in models
+        ext = models["external:model_a"]
+        assert ext["mean_readiness_score"] == 66.0
+        assert ext["mean_delta_readiness_vs_baseline"] == -22.0

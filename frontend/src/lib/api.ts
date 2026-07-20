@@ -89,6 +89,17 @@ export type BlindspotsResponse = {
   count: number;
 };
 
+export type CancelRunResponse = {
+  id: string;
+  scenario_id: string;
+  status: string;
+  stage: string;
+  progress: number;
+  message: string;
+  cancel_requested: boolean;
+  cancelled_at?: string | null;
+};
+
 export type StressProfile = {
   id: string;
   name: string;
@@ -140,6 +151,21 @@ export type CreateBenchmarkRequest = {
 export type CreateBenchmarkResponse = {
   batch_id: string;
   item_count: number;
+};
+
+export type ExternalModelInput = {
+  id: string;
+  predictions_path: string;
+  name?: string;
+};
+
+export type CreateExternalBenchmarkRequest = {
+  name: string;
+  scenarios: string[];
+  external_models: ExternalModelInput[];
+  seeds: number[];
+  include_internal_baseline: boolean;
+  run_options_overrides: Record<string, unknown>;
 };
 
 export type CompareRunsResponse = {
@@ -223,8 +249,8 @@ export function getRunBlindspots(runId: string): Promise<BlindspotsResponse> {
   return getJson<BlindspotsResponse>(`/api/runs/${runId}/blindspots`);
 }
 
-export function cancelRun(runId: string): Promise<RunDetail> {
-  return postJson<RunDetail>(`/api/runs/${runId}/cancel`, {});
+export function cancelRun(runId: string): Promise<CancelRunResponse> {
+  return postJson<CancelRunResponse>(`/api/runs/${runId}/cancel`, {});
 }
 
 export function getRunGate(runId: string): Promise<Record<string, unknown>> {
@@ -247,12 +273,20 @@ export function createBenchmark(payload: CreateBenchmarkRequest): Promise<Create
   return postJson<CreateBenchmarkResponse>("/api/benchmarks", payload);
 }
 
+export function createExternalBenchmark(payload: CreateExternalBenchmarkRequest): Promise<CreateBenchmarkResponse> {
+  return postJson<CreateBenchmarkResponse>("/api/benchmarks/external", payload);
+}
+
 export function listBenchmarkBatches(limit = 25): Promise<{ batches: BenchmarkBatchSummary[] }> {
   return getJson<{ batches: BenchmarkBatchSummary[] }>(`/api/benchmarks?limit=${limit}`);
 }
 
 export function getBenchmarkBatch(batchId: string): Promise<BenchmarkBatch> {
   return getJson<BenchmarkBatch>(`/api/benchmarks/${batchId}`);
+}
+
+export function getBenchmarkScorecard(batchId: string): Promise<Record<string, unknown>> {
+  return getJson<Record<string, unknown>>(`/api/benchmarks/${batchId}/scorecard`);
 }
 
 export function downloadBenchmarkCsv(batchId: string): Promise<Blob> {

@@ -207,6 +207,62 @@ curl -X POST http://127.0.0.1:8000/api/run \
   -d '{"scenario_id":"urban_dusk","options":{"resize":640,"every_n_frames":2,"max_frames":120}}'
 ```
 
+Optional: run ARES metrics/gates against external detector outputs (competitor/BYO model):
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/run \
+  -H 'Content-Type: application/json' \
+  -d '{"scenario_id":"urban_dusk","options":{"resize":640,"every_n_frames":2,"max_frames":120,"external_predictions_path":"predictions/urban_dusk_competitor.json"}}'
+```
+
+`external_predictions_path` can be absolute or relative to `backend/data`. Supported JSON formats:
+
+```json
+{
+  "backend": "competitor_x",
+  "detections_by_frame": {
+    "0": [{"bbox":[10,12,30,20],"confidence":0.92,"label":"drone"}],
+    "2": []
+  }
+}
+```
+
+External detector benchmark batches (multiple competitor models + automatic scorecards):
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/benchmarks/external \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "External Model Shootout",
+    "scenarios": ["urban_dusk"],
+    "external_models": [
+      {"id":"model_a","name":"Model A","predictions_path":"predictions/model_a_urban_dusk.json"},
+      {"id":"model_b","name":"Model B","predictions_path":"predictions/model_b_urban_dusk.json"}
+    ],
+    "seeds": [12345],
+    "include_internal_baseline": true,
+    "run_options_overrides": {"resize":320,"every_n_frames":1,"max_frames":60}
+  }'
+```
+
+Fetch comparative scorecard:
+
+```bash
+curl http://127.0.0.1:8000/api/benchmarks/<batch_id>/scorecard
+```
+
+or sequence-aligned:
+
+```json
+{
+  "backend": "competitor_x",
+  "frame_boxes": [
+    [{"bbox":[10,12,30,20],"confidence":0.92,"label":"drone"}],
+    []
+  ]
+}
+```
+
 Expected response (example): `POST /api/run` is **asynchronous** and returns immediately with a queued run.
 
 ```json
@@ -247,6 +303,7 @@ Each ZIP includes a `manifest.json` with SHA256 hashes, environment hints (ffmpe
 - Update config (local/dev): `POST /api/gates`
 - Evaluate run: `GET /api/runs/{run_id}/gate`
 - Evaluate batch: `GET /api/benchmarks/{batch_id}/gate`
+- External model scorecard: `GET /api/benchmarks/{batch_id}/scorecard`
 
 ### Delta-First Compare
 
@@ -274,6 +331,26 @@ curl -X POST http://127.0.0.1:8000/api/run/sync \
   -H 'Content-Type: application/json' \
   -d '{"scenario_id":"urban_dusk","options":{"resize":640,"every_n_frames":2,"max_frames":120}}'
 ```
+
+## API Access Control (Optional)
+
+Mutating endpoints can be protected with API keys + roles (`viewer`, `operator`, `admin`).
+
+Set env vars before starting backend:
+
+```bash
+export ARES_API_AUTH_ENABLED=1
+export ARES_API_KEY_ROLES_JSON='{"admin-key":"admin","ops-key":"operator"}'
+```
+
+Then call mutating endpoints with either:
+- `X-API-Key: <key>`
+- `Authorization: Bearer <key>`
+
+Role requirements:
+- `POST /api/gates`: `admin`
+- `POST /api/run`, `POST /api/benchmarks`, `POST /api/benchmarks/external`, `POST /api/runs/{id}/cancel`: `operator`
+- `POST /api/run/sync`: `admin`
 
 ## Golden Demo Scenario (Reproducible)
 
