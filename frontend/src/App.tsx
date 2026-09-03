@@ -637,11 +637,11 @@ function App() {
                 <p className="text-sm text-slate-200">FP/min: {fpRate.toFixed(2)}</p>
               </article>
               <article className="rounded border border-tactical-700 bg-tactical-900/70 p-4 shadow-glow">
-                <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Engagement</p>
-                <p className="mt-2 text-sm text-slate-200">Attempts: {engagementAttempts}</p>
-                <p className="text-sm text-slate-200">Success: {(engagementSuccess * 100).toFixed(1)}%</p>
-                <p className="text-sm text-slate-200">Waste: {(wasteRate * 100).toFixed(1)}%</p>
-                <p className="text-sm text-slate-200">Collateral Risk: {collateralRisk.toFixed(2)}</p>
+                <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Threshold simulation</p>
+                <p className="mt-2 text-sm text-slate-200">Triggered samples: {engagementAttempts}</p>
+                <p className="text-sm text-slate-200">Detection success: {(engagementSuccess * 100).toFixed(1)}%</p>
+                <p className="text-sm text-slate-200">False activation: {(wasteRate * 100).toFixed(1)}%</p>
+                <p className="text-sm text-slate-200">Risk proxy: {collateralRisk.toFixed(2)}</p>
               </article>
             </section>
 

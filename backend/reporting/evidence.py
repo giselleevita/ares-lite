@@ -376,6 +376,7 @@ def _build_manifest(*, hashes: dict[str, str], warnings: list[str], extra: dict[
     files = [{"path": k, "sha256": v} for k, v in sorted(hashes.items(), key=lambda kv: kv[0])]
     commit = _git_commit()
     return {
+        "manifest_version": "1.0.0",
         "created_at": _utcnow_iso(),
         "repo_commit": commit,
         "ffmpeg_version": diagnostics.get("ffmpeg_version"),

@@ -1,7 +1,7 @@
-# ARES Lite — Counter-UAS Reliability & Engagement Simulator
+# ARES Lite — Offline Video-Detection Reliability Toolkit
 
 [![Docker demo](https://img.shields.io/badge/demo-docker%20compose-2496ED?style=flat&logo=docker&logoColor=white)](#docker-demo-runs-anywhere)
-[![Private repo](https://img.shields.io/badge/repo-private-lightgrey)](https://github.com/giselleevita/portfolio/blob/main/docs/BADGE_POLICY.md)
+[![Status: case study](https://img.shields.io/badge/status-reliability%20case%20study-6b7280)](docs/ENGINEERING_CASE_STUDY.md)
 
 **Offline reliability and benchmarking suite for video detection pipelines.**
 
@@ -9,8 +9,12 @@ ARES Lite evaluates detector behavior against reproducible, annotated scenarios.
 video ingestion and inference pipelines, records results in SQLite, calculates readiness
 metrics, applies policy-as-code acceptance gates, and exports tamper-evident evidence packs.
 
-The bundled dataset is synthetic and the output is for engineering evaluation only. It does
-not certify operational safety or replace field validation.
+The bundled dataset is synthetic and the output is for offline engineering evaluation only. It does
+not certify operational safety or replace field validation. The project intentionally excludes live
+targeting, autonomous action, hardware control, real-person tracking, and operational deployment guidance.
+
+See the [engineering case study](docs/ENGINEERING_CASE_STUDY.md) for methodology, architecture, limitations,
+and a five-minute demonstration.
 
 ## Engineering Highlights
 
