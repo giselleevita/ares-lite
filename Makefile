@@ -5,12 +5,17 @@ FRONTEND_DIR := frontend
 VENV := $(BACKEND_DIR)/.venv
 PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
+BOOTSTRAP_PYTHON := $(shell command -v python3.11 2>/dev/null || command -v python3.12 2>/dev/null || command -v python3.13 2>/dev/null || command -v python3.10 2>/dev/null || command -v python3.14 2>/dev/null || true)
 
 .PHONY: setup dev demo dataset backend frontend test selfcheck clean docker-demo docker-selftest
 .PHONY: doctor
 
 setup:
-	python3 -m venv $(VENV)
+	@if [ -z "$(BOOTSTRAP_PYTHON)" ]; then \
+		echo "Python 3.10+ is required. Install python3.11+ and retry."; \
+		exit 1; \
+	fi
+	$(BOOTSTRAP_PYTHON) -m venv $(VENV)
 	$(PIP) install --upgrade pip
 	$(PIP) install -r $(BACKEND_DIR)/requirements.txt
 	cd $(FRONTEND_DIR) && npm install
@@ -42,7 +47,11 @@ docker-selftest:
 	./scripts/docker_selftest.sh
 
 dataset:
-	python3 scripts/generate_synthetic_dataset.py
+	@if [ -x "$(PYTHON)" ]; then \
+		"$(PYTHON)" scripts/generate_synthetic_dataset.py; \
+	else \
+		"$(BOOTSTRAP_PYTHON)" scripts/generate_synthetic_dataset.py; \
+	fi
 
 backend:
 	cd $(BACKEND_DIR) && .venv/bin/uvicorn main:app --reload --host 127.0.0.1 --port 8000
