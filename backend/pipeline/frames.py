@@ -112,7 +112,9 @@ def extract_sampled_frames(
         str(clip_path),
         "-vf",
         filter_expr,
-        "-vsync",
+        # FFmpeg 8 removed the legacy -vsync option. fps_mode is supported by
+        # current FFmpeg releases and preserves variable-frame-rate sampling.
+        "-fps_mode",
         "vfr",
         "-frames:v",
         str(len(sampled_frame_indices)),
