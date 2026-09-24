@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from core.ids import new_run_id
 from core.gates import evaluate_gate, load_gates_config
+from core.paths import resolve_under
 from core.settings import settings
 from db.models import BenchmarkBatch, BenchmarkItem, Engagement, Metric, Readiness, Run
 from db.runs import safe_json, touch_run
@@ -33,10 +34,7 @@ def _ensure_profile_json(profile: str | dict[str, Any]) -> dict[str, Any]:
 
 
 def _resolve_external_predictions_path(raw_path: str) -> Path:
-    path = Path(str(raw_path).strip())
-    if not path.is_absolute():
-        path = Path(settings.data_dir) / path
-    return path
+    return resolve_under(settings.data_dir, str(raw_path).strip())
 
 
 def _enqueue_batch_run(

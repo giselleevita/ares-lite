@@ -219,7 +219,10 @@ curl -X POST http://127.0.0.1:8000/api/run \
   -d '{"scenario_id":"urban_dusk","options":{"resize":640,"every_n_frames":2,"max_frames":120,"external_predictions_path":"predictions/urban_dusk_competitor.json"}}'
 ```
 
-`external_predictions_path` can be absolute or relative to `backend/data`. Supported JSON formats:
+`external_predictions_path` may be relative to the configured data directory
+(`backend/data` by default), or an absolute path already inside that directory.
+It must resolve within the data directory; the same containment applies to
+scenario clips and annotations. Supported JSON formats:
 
 ```json
 {
