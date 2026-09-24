@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from core.boxes import BoxValidationError, normalize_prediction_boxes
 from core.cancel import CancelledRun
 from core.gates import evaluate_gate, load_gates_config
+from core.paths import resolve_under
 from core.rng import choose_seed
 from core.settings import settings
 from db.models import Detection
@@ -39,10 +40,13 @@ def _resolve_external_predictions_path(raw_value: Any) -> Path | None:
     text = str(raw_value).strip()
     if not text:
         return None
-    candidate = Path(text)
-    if not candidate.is_absolute():
-        candidate = Path(settings.data_dir) / candidate
-    return candidate
+    try:
+        return resolve_under(settings.data_dir, text)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="external_predictions_path must remain within the configured data directory",
+        ) from exc
 
 
 def _load_external_detector_result(
@@ -123,11 +127,17 @@ def process_run(
     if not clip_rel:
         raise HTTPException(status_code=500, detail=f"Scenario {scenario.get('id')} has no clip configured")
 
-    clip_path = Path(settings.data_dir) / clip_rel
+    try:
+        clip_path = resolve_under(settings.data_dir, str(clip_rel))
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail="Scenario clip path is outside the data directory") from exc
     if not clip_path.exists():
         raise HTTPException(status_code=500, detail=f"Scenario clip not found: {clip_rel}")
 
-    run_dir = Path(settings.runs_dir) / run_id
+    try:
+        run_dir = resolve_under(settings.runs_dir, run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail="Run storage path is invalid") from exc
     frames_dir = run_dir / "frames"
 
     if is_cancel_requested(db, run_id):
@@ -348,7 +358,10 @@ def process_run(
     }
 
     annotation_rel = scenario.get("ground_truth")
-    annotation_path = Path(settings.data_dir) / annotation_rel if annotation_rel else Path("")
+    try:
+        annotation_path = resolve_under(settings.data_dir, str(annotation_rel)) if annotation_rel else Path("")
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail="Scenario annotation path is outside the data directory") from exc
     try:
         ground_truth_by_frame = load_ground_truth_annotations(annotation_path, sampled_indices)
     except BoxValidationError as exc:

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from core.diagnostics import collect_health_diagnostics
 from core.gates import evaluate_gate, load_gates_config
+from core.paths import resolve_under
 from core.settings import settings
 from db.models import BenchmarkBatch, BenchmarkItem, Engagement, Metric, Readiness, Run
 from pipeline.blindspots import get_detection_boxes, load_ground_truth_map, render_overlay_image
@@ -35,13 +36,6 @@ def _git_commit() -> str | None:
         return commit or None
     except Exception:
         return None
-
-
-def _safe_under(base: Path, path: Path) -> bool:
-    try:
-        return path.resolve().is_relative_to(base.resolve())
-    except Exception:
-        return False
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -90,7 +84,7 @@ def _loads_json(value: str | None) -> dict[str, Any]:
 
 
 def _run_dir(run_id: str) -> Path:
-    return Path(settings.runs_dir) / run_id
+    return resolve_under(settings.runs_dir, run_id)
 
 
 def _frame_index_to_sequence_map(meta: dict[str, Any]) -> dict[int, int]:
@@ -114,10 +108,7 @@ def build_run_evidence_pack(
     max_blindspots: int = 20,
     include_frames: bool = True,
 ) -> Path:
-    runs_base = Path(settings.runs_dir)
     run_dir = _run_dir(run_id)
-    if not _safe_under(runs_base, run_dir):
-        raise ValueError("Invalid run_id path")
     run = db.query(Run).filter(Run.id == run_id).first()
     if run is None:
         raise ValueError("Run not found")
@@ -161,7 +152,7 @@ def build_run_evidence_pack(
         meta.get("config_envelope", {}).get("scenario_snapshot", {}).get("ground_truth")
         or meta.get("config_envelope", {}).get("scenario_snapshot", {}).get("ground_truth_path")
     )
-    annotation_path = Path(settings.data_dir) / str(annotation_rel) if annotation_rel else None
+    annotation_path = resolve_under(settings.data_dir, str(annotation_rel)) if annotation_rel else None
     gt_map = load_ground_truth_map(annotation_path) if annotation_path else {}
 
     blindspots = meta.get("blindspots", [])
@@ -241,10 +232,7 @@ def build_run_evidence_pack(
 
 
 def build_batch_evidence_pack(db: Session, *, batch_id: str) -> Path:
-    runs_base = Path(settings.runs_dir)
-    batch_dir = runs_base / "_batches" / batch_id
-    if not _safe_under(runs_base, batch_dir):
-        raise ValueError("Invalid batch_id path")
+    batch_dir = resolve_under(settings.runs_dir, "_batches", batch_id)
 
     batch = db.query(BenchmarkBatch).filter(BenchmarkBatch.id == batch_id).first()
     if batch is None:

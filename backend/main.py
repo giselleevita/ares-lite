@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from core.logging import configure_logging
 from core.settings import settings
+from core.paths import resolve_under
 from core.diagnostics import collect_health_diagnostics
 from core.gates import evaluate_gate, load_gates_config, save_gates_config
 from core.auth import require_role
@@ -108,7 +109,10 @@ def _load_run_config(run_record: Run) -> dict[str, Any]:
 
 
 def _run_dir(run_id: str) -> Path:
-    return Path(settings.runs_dir) / run_id
+    try:
+        return resolve_under(settings.runs_dir, run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Run not found") from exc
 
 
 def _stressed_frame_path(run_id: str, frame_idx: int) -> Path:
@@ -120,7 +124,10 @@ def _annotation_path_from_config(config_payload: dict[str, Any]) -> Path | None:
     annotation_rel = scenario_snapshot.get("ground_truth")
     if not annotation_rel:
         return None
-    return Path(settings.data_dir) / str(annotation_rel)
+    try:
+        return resolve_under(settings.data_dir, str(annotation_rel))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Run annotation path is invalid") from exc
 
 
 def _load_run_metadata(run_id: str) -> dict[str, Any] | None:
