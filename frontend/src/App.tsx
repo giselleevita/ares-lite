@@ -554,7 +554,7 @@ function App() {
                 <select
                   value={selectedScenarioId}
                   onChange={(e) => setSelectedScenarioId(e.target.value)}
-                  className="rounded border border-tactical-700 bg-tactical-900/70 px-3 py-2 text-sm text-slate-100"
+                  className="rounded-sm border border-tactical-700 bg-tactical-900/70 px-3 py-2 text-sm text-slate-100"
                 >
                   {scenarios.map((s) => (
                     <option key={s.id} value={s.id}>
@@ -566,7 +566,7 @@ function App() {
                   type="button"
                   onClick={() => void onCreateRun()}
                   disabled={creatingRun || !selectedScenarioId}
-                  className="rounded border border-accent-amber bg-tactical-800/80 px-3 py-2 font-mono text-xs uppercase tracking-widest text-slate-100 disabled:opacity-50"
+                  className="rounded-sm border border-accent-amber bg-tactical-800/80 px-3 py-2 font-mono text-xs uppercase tracking-widest text-slate-100 disabled:opacity-50"
                 >
                   {creatingRun ? "Queuing..." : "Start Run"}
                 </button>
@@ -574,7 +574,7 @@ function App() {
                   type="button"
                   onClick={() => void onRunDemo()}
                   disabled={creatingRun}
-                  className="rounded border border-tactical-500 bg-tactical-800/60 px-3 py-2 font-mono text-xs uppercase tracking-widest text-slate-100 disabled:opacity-50"
+                  className="rounded-sm border border-tactical-500 bg-tactical-800/60 px-3 py-2 font-mono text-xs uppercase tracking-widest text-slate-100 disabled:opacity-50"
                 >
                   Run Demo
                 </button>
@@ -588,12 +588,12 @@ function App() {
 
         {page === "runs" ? (
           <section className="grid gap-4 lg:grid-cols-[320px_1fr]">
-          <aside className="rounded border border-tactical-700 bg-tactical-900/70 p-3">
+          <aside className="rounded-sm border border-tactical-700 bg-tactical-900/70 p-3">
             <h2 className="font-mono text-xs uppercase tracking-widest text-tactical-200">Run List</h2>
             <input
               value={runSearch}
               onChange={(e) => setRunSearch(e.target.value)}
-              className="mt-3 w-full rounded border border-tactical-700 bg-tactical-950/40 px-3 py-2 text-sm"
+              className="mt-3 w-full rounded-sm border border-tactical-700 bg-tactical-950/40 px-3 py-2 text-sm"
               placeholder="Search runs (id/scenario/status)..."
             />
             <p className="mt-2 text-xs text-slate-400">Showing {filteredRuns.length} / {runs.length}.</p>
@@ -623,12 +623,12 @@ function App() {
 
           <div className="space-y-4">
             <section className="grid gap-4 md:grid-cols-3">
-              <article className="rounded border border-tactical-700 bg-tactical-900/70 p-4 shadow-glow">
+              <article className="rounded-sm border border-tactical-700 bg-tactical-900/70 p-4 shadow-glow">
                 <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Readiness</p>
                 <p className="mt-2 font-tactical text-4xl text-slate-100">{readinessScore.toFixed(1)}</p>
                 <p className="text-xs uppercase tracking-wider text-accent-amber">{recommendation}</p>
               </article>
-              <article className="rounded border border-tactical-700 bg-tactical-900/70 p-4 shadow-glow">
+              <article className="rounded-sm border border-tactical-700 bg-tactical-900/70 p-4 shadow-glow">
                 <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Reliability</p>
                 <p className="mt-2 text-sm text-slate-200">Precision: {(precision * 100).toFixed(1)}%</p>
                 <p className="text-sm text-slate-200">Recall: {(recall * 100).toFixed(1)}%</p>
@@ -636,7 +636,7 @@ function App() {
                 <p className="text-sm text-slate-200">Delay: {delay}s</p>
                 <p className="text-sm text-slate-200">FP/min: {fpRate.toFixed(2)}</p>
               </article>
-              <article className="rounded border border-tactical-700 bg-tactical-900/70 p-4 shadow-glow">
+              <article className="rounded-sm border border-tactical-700 bg-tactical-900/70 p-4 shadow-glow">
                 <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Threshold simulation</p>
                 <p className="mt-2 text-sm text-slate-200">Triggered samples: {engagementAttempts}</p>
                 <p className="text-sm text-slate-200">Detection success: {(engagementSuccess * 100).toFixed(1)}%</p>
@@ -646,7 +646,7 @@ function App() {
             </section>
 
             {readinessBreakdown ? (
-              <section className="rounded border border-tactical-700 bg-tactical-900/60 p-4">
+              <section className="rounded-sm border border-tactical-700 bg-tactical-900/60 p-4">
                 <details>
                   <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.2em] text-tactical-200">
                     Readiness Breakdown
@@ -714,7 +714,7 @@ function App() {
               </section>
             ) : null}
 
-            <section className="rounded border border-tactical-700 bg-tactical-900/60 p-4">
+            <section className="rounded-sm border border-tactical-700 bg-tactical-900/60 p-4">
               <h2 className="font-tactical text-xl uppercase">Blind Spots</h2>
               <p className="mt-1 text-sm text-slate-300">
                 Run: {String(runDetail?.id ?? "n/a")} • Scenario: {String(runDetail?.scenario_id ?? "n/a")} • Status: {String(runDetail?.status ?? "n/a")} • Stage: {String(runDetail?.stage ?? "n/a")} • FNs: {blindspots.length}
@@ -724,11 +724,11 @@ function App() {
                   <button
                     type="button"
                     onClick={() => void onDownloadRunEvidence()}
-                    className="rounded border border-tactical-700 bg-tactical-900/60 px-3 py-2 font-mono text-xs uppercase tracking-widest text-tactical-100 hover:border-tactical-500"
+                    className="rounded-sm border border-tactical-700 bg-tactical-900/60 px-3 py-2 font-mono text-xs uppercase tracking-widest text-tactical-100 hover:border-tactical-500"
                   >
                     Download Evidence Pack
                   </button>
-                  <div className="rounded border border-tactical-700 bg-black/20 px-3 py-2 text-xs text-slate-200">
+                  <div className="rounded-sm border border-tactical-700 bg-black/20 px-3 py-2 text-xs text-slate-200">
                     Gate:{" "}
                     <span
                       className={
@@ -745,7 +745,7 @@ function App() {
                 </div>
               ) : null}
               {String((runGate as any)?.status ?? "") === "fail" && Array.isArray((runGate as any)?.checks) ? (
-                <details className="mt-3 rounded border border-tactical-700 bg-black/20 p-3">
+                <details className="mt-3 rounded-sm border border-tactical-700 bg-black/20 p-3">
                   <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.2em] text-tactical-200">
                     Failed Gate Checks
                   </summary>
@@ -766,7 +766,7 @@ function App() {
                   <button
                     type="button"
                     onClick={() => void onCancelRun()}
-                    className="rounded border border-accent-red bg-tactical-800/80 px-3 py-2 font-mono text-xs uppercase tracking-widest text-slate-100"
+                    className="rounded-sm border border-accent-red bg-tactical-800/80 px-3 py-2 font-mono text-xs uppercase tracking-widest text-slate-100"
                   >
                     Cancel Run
                   </button>
@@ -794,18 +794,18 @@ function App() {
                 </div>
 
                 <div className="grid gap-3 md:grid-cols-2">
-                  <div className="rounded border border-tactical-700 bg-black/30 p-2">
+                  <div className="rounded-sm border border-tactical-700 bg-black/30 p-2">
                     <p className="mb-2 font-mono text-xs uppercase tracking-wide text-slate-300">Stressed Frame</p>
                     {selectedFrameUrl ? (
-                      <img src={selectedFrameUrl} alt="stressed frame" className="h-[300px] w-full rounded object-contain" />
+                      <img src={selectedFrameUrl} alt="stressed frame" className="h-[300px] w-full rounded-sm object-contain" />
                     ) : (
                       <div className="flex h-[300px] items-center justify-center text-sm text-slate-500">No frame selected</div>
                     )}
                   </div>
-                  <div className="rounded border border-tactical-700 bg-black/30 p-2">
+                  <div className="rounded-sm border border-tactical-700 bg-black/30 p-2">
                     <p className="mb-2 font-mono text-xs uppercase tracking-wide text-slate-300">Overlay Evidence</p>
                     {selectedOverlayUrl ? (
-                      <img src={selectedOverlayUrl} alt="overlay frame" className="h-[300px] w-full rounded object-contain" />
+                      <img src={selectedOverlayUrl} alt="overlay frame" className="h-[300px] w-full rounded-sm object-contain" />
                     ) : (
                       <div className="flex h-[300px] items-center justify-center text-sm text-slate-500">No overlay selected</div>
                     )}
@@ -817,12 +817,12 @@ function App() {
         </section>
         ) : page === "benchmarks" ? (
           <section className="grid gap-4 lg:grid-cols-[360px_1fr]">
-            <aside className="rounded border border-tactical-700 bg-tactical-900/70 p-3">
+            <aside className="rounded-sm border border-tactical-700 bg-tactical-900/70 p-3">
               <h2 className="font-mono text-xs uppercase tracking-widest text-tactical-200">Batches</h2>
               <p className="mt-2 text-sm text-slate-400">Create and monitor benchmark batches (suite runs).</p>
 
               <div className="mt-4 space-y-3">
-                <div className="rounded border border-tactical-700 bg-tactical-950/40 p-3">
+                <div className="rounded-sm border border-tactical-700 bg-tactical-950/40 p-3">
                   <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Create Batch</p>
 
                   <div className="mt-3 space-y-3">
@@ -875,14 +875,14 @@ function App() {
                       <input
                         value={benchmarkSeeds}
                         onChange={(e) => setBenchmarkSeeds(e.target.value)}
-                        className="mt-2 w-full rounded border border-tactical-700 bg-tactical-950/40 px-3 py-2 text-sm"
+                        className="mt-2 w-full rounded-sm border border-tactical-700 bg-tactical-950/40 px-3 py-2 text-sm"
                         placeholder="12345, 1337"
                       />
                       <button
                         type="button"
                         onClick={() => void onStartBenchmark()}
                         disabled={creatingRun}
-                        className="mt-3 w-full rounded border border-accent-amber bg-tactical-800/80 px-3 py-2 font-mono text-xs uppercase tracking-widest text-slate-100 disabled:opacity-50"
+                        className="mt-3 w-full rounded-sm border border-accent-amber bg-tactical-800/80 px-3 py-2 font-mono text-xs uppercase tracking-widest text-slate-100 disabled:opacity-50"
                       >
                         {creatingRun ? "Queuing..." : "Start Benchmark"}
                       </button>
@@ -890,7 +890,7 @@ function App() {
                   </div>
                 </div>
 
-                <div className="rounded border border-tactical-700 bg-tactical-950/40 p-3">
+                <div className="rounded-sm border border-tactical-700 bg-tactical-950/40 p-3">
                   <div className="flex items-center justify-between gap-2">
                     <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Recent Batches</p>
                     <button
@@ -905,7 +905,7 @@ function App() {
                           }
                         })()
                       }
-                      className="rounded border border-tactical-700 bg-tactical-900/60 px-2 py-1 font-mono text-[11px] uppercase tracking-widest text-tactical-200 hover:border-tactical-500"
+                      className="rounded-sm border border-tactical-700 bg-tactical-900/60 px-2 py-1 font-mono text-[11px] uppercase tracking-widest text-tactical-200 hover:border-tactical-500"
                     >
                       Refresh
                     </button>
@@ -942,7 +942,7 @@ function App() {
 
             <div className="space-y-4">
               {benchmarkSuite ? (
-                <section className="rounded border border-tactical-700 bg-tactical-900/60 p-4">
+                <section className="rounded-sm border border-tactical-700 bg-tactical-900/60 p-4">
                   <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                     <div>
                       <p className="text-sm text-slate-200">
@@ -956,21 +956,21 @@ function App() {
                       <button
                         type="button"
                         onClick={() => void onDownloadCsv()}
-                        className="rounded border border-tactical-700 bg-tactical-900/60 px-3 py-2 font-mono text-xs uppercase tracking-widest text-tactical-100 hover:border-tactical-500"
+                        className="rounded-sm border border-tactical-700 bg-tactical-900/60 px-3 py-2 font-mono text-xs uppercase tracking-widest text-tactical-100 hover:border-tactical-500"
                       >
                         Download CSV
                       </button>
                       <button
                         type="button"
                         onClick={() => void onDownloadBatchEvidence()}
-                        className="rounded border border-tactical-700 bg-tactical-900/60 px-3 py-2 font-mono text-xs uppercase tracking-widest text-tactical-100 hover:border-tactical-500"
+                        className="rounded-sm border border-tactical-700 bg-tactical-900/60 px-3 py-2 font-mono text-xs uppercase tracking-widest text-tactical-100 hover:border-tactical-500"
                       >
                         Download Evidence Pack
                       </button>
                       <button
                         type="button"
                         onClick={() => void setBenchmarkSuiteId(benchmarkSuite.id)}
-                        className="rounded border border-tactical-700 bg-tactical-900/60 px-3 py-2 font-mono text-xs uppercase tracking-widest text-tactical-200 hover:border-tactical-500"
+                        className="rounded-sm border border-tactical-700 bg-tactical-900/60 px-3 py-2 font-mono text-xs uppercase tracking-widest text-tactical-200 hover:border-tactical-500"
                       >
                         Refresh
                       </button>
@@ -983,7 +983,7 @@ function App() {
                       <select
                         value={benchmarkFilterScenario}
                         onChange={(e) => setBenchmarkFilterScenario(e.target.value)}
-                        className="mt-1 w-full rounded border border-tactical-700 bg-tactical-950/40 px-2 py-2 text-sm"
+                        className="mt-1 w-full rounded-sm border border-tactical-700 bg-tactical-950/40 px-2 py-2 text-sm"
                       >
                         <option value="all">all</option>
                         {Array.from(new Set(benchmarkSuite.items.map((i) => i.scenario_id))).map((id) => (
@@ -998,7 +998,7 @@ function App() {
                       <select
                         value={benchmarkFilterProfile}
                         onChange={(e) => setBenchmarkFilterProfile(e.target.value)}
-                        className="mt-1 w-full rounded border border-tactical-700 bg-tactical-950/40 px-2 py-2 text-sm"
+                        className="mt-1 w-full rounded-sm border border-tactical-700 bg-tactical-950/40 px-2 py-2 text-sm"
                       >
                         <option value="all">all</option>
                         {Array.from(
@@ -1017,7 +1017,7 @@ function App() {
                       <select
                         value={benchmarkFilterStatus}
                         onChange={(e) => setBenchmarkFilterStatus(e.target.value)}
-                        className="mt-1 w-full rounded border border-tactical-700 bg-tactical-950/40 px-2 py-2 text-sm"
+                        className="mt-1 w-full rounded-sm border border-tactical-700 bg-tactical-950/40 px-2 py-2 text-sm"
                       >
                         <option value="all">all</option>
                         {Array.from(new Set(benchmarkSuite.items.map((i) => i.status))).map((id) => (
@@ -1032,7 +1032,7 @@ function App() {
                       <select
                         value={benchmarkFilterRole}
                         onChange={(e) => setBenchmarkFilterRole(e.target.value)}
-                        className="mt-1 w-full rounded border border-tactical-700 bg-tactical-950/40 px-2 py-2 text-sm"
+                        className="mt-1 w-full rounded-sm border border-tactical-700 bg-tactical-950/40 px-2 py-2 text-sm"
                       >
                         <option value="all">all</option>
                         {Array.from(new Set(benchmarkSuite.items.map((i) => i.role))).map((id) => (
@@ -1047,7 +1047,7 @@ function App() {
                       <input
                         value={benchmarkFilterSeed}
                         onChange={(e) => setBenchmarkFilterSeed(e.target.value)}
-                        className="mt-1 w-full rounded border border-tactical-700 bg-tactical-950/40 px-2 py-2 text-sm"
+                        className="mt-1 w-full rounded-sm border border-tactical-700 bg-tactical-950/40 px-2 py-2 text-sm"
                         placeholder="e.g. 12345"
                       />
                     </div>
@@ -1088,7 +1088,7 @@ function App() {
                                       setSelectedRunId(String(item.run_id));
                                       setPage("runs");
                                     }}
-                                    className="rounded border border-tactical-700 bg-tactical-900/60 px-2 py-1 font-mono text-xs"
+                                    className="rounded-sm border border-tactical-700 bg-tactical-900/60 px-2 py-1 font-mono text-xs"
                                   >
                                     {item.run_id}
                                   </button>
@@ -1105,7 +1105,7 @@ function App() {
 
                   {benchmarkSuite.status === "completed" && benchmarkSuite.summary ? (
                     <div className="mt-4 grid gap-4 md:grid-cols-2">
-                      <div className="rounded border border-tactical-700 bg-black/30 p-3">
+                      <div className="rounded-sm border border-tactical-700 bg-black/30 p-3">
                         <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Overall</p>
                         <div className="mt-2 text-sm text-slate-200">
                           <p>Mean: {String((benchmarkSuite.summary as any)?.overall?.mean_readiness ?? "n/a")}</p>
@@ -1114,7 +1114,7 @@ function App() {
                           <p>Pass (&ge; 75): {String((benchmarkSuite.summary as any)?.overall?.pass_rate_ready ?? "n/a")}</p>
                         </div>
                       </div>
-                      <div className="rounded border border-tactical-700 bg-black/30 p-3">
+                      <div className="rounded-sm border border-tactical-700 bg-black/30 p-3">
                         <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Top Blindspot Reasons</p>
                         <div className="mt-2 space-y-1 text-sm text-slate-200">
                           {Array.isArray((benchmarkSuite.summary as any)?.top_blindspot_reasons) &&
@@ -1130,7 +1130,7 @@ function App() {
                         </div>
                       </div>
 
-                      <div className="rounded border border-tactical-700 bg-black/30 p-3">
+                      <div className="rounded-sm border border-tactical-700 bg-black/30 p-3">
                         <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Gates</p>
                         <div className="mt-2 text-sm text-slate-200">
                           <p>Pass rate: {String((benchmarkSuite.summary as any)?.gates?.pass_rate ?? "n/a")}</p>
@@ -1150,7 +1150,7 @@ function App() {
                         </div>
                       </div>
 
-                      <div className="rounded border border-tactical-700 bg-black/30 p-3">
+                      <div className="rounded-sm border border-tactical-700 bg-black/30 p-3">
                         <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">Worst Regressions</p>
                         <div className="mt-2 text-sm text-slate-200">
                           <p>Worst readiness delta: {String((benchmarkSuite.summary as any)?.deltas?.worst_delta_readiness ?? "n/a")}</p>
@@ -1170,7 +1170,7 @@ function App() {
                         </div>
                       </div>
 
-                      <div className="rounded border border-tactical-700 bg-black/30 p-3 md:col-span-2">
+                      <div className="rounded-sm border border-tactical-700 bg-black/30 p-3 md:col-span-2">
                         <p className="font-mono text-xs uppercase tracking-widest text-tactical-300">By Stress Profile</p>
                         <div className="mt-3 overflow-x-auto">
                           <table className="w-full min-w-[700px] border-collapse text-left text-sm">
@@ -1194,9 +1194,9 @@ function App() {
                                       <td className="py-2 pr-3">{String(row?.mean ?? "n/a")}</td>
                                       <td className="py-2 pr-3">{String(row?.worst ?? "n/a")}</td>
                                       <td className="py-2">
-                                        <div className="h-2 w-full rounded bg-tactical-800/60">
+                                        <div className="h-2 w-full rounded-sm bg-tactical-800/60">
                                           <div
-                                            className="h-2 rounded bg-accent-amber"
+                                            className="h-2 rounded-sm bg-accent-amber"
                                             style={{ width: `${Math.max(0, Math.min(100, m))}%` }}
                                           />
                                         </div>
@@ -1210,7 +1210,7 @@ function App() {
                         </div>
                       </div>
 
-                      <details className="rounded border border-tactical-700 bg-black/30 p-3 md:col-span-2">
+                      <details className="rounded-sm border border-tactical-700 bg-black/30 p-3 md:col-span-2">
                         <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.2em] text-tactical-200">
                           Raw Summary JSON
                         </summary>
@@ -1222,7 +1222,7 @@ function App() {
                   ) : null}
                 </section>
               ) : (
-                <section className="rounded border border-tactical-700 bg-tactical-900/60 p-4">
+                <section className="rounded-sm border border-tactical-700 bg-tactical-900/60 p-4">
                   <p className="text-sm text-slate-300">Select a batch from the left, or create one.</p>
                 </section>
               )}
@@ -1230,7 +1230,7 @@ function App() {
           </section>
         ) : (
           <section className="grid gap-4 lg:grid-cols-[360px_1fr]">
-            <aside className="rounded border border-tactical-700 bg-tactical-900/70 p-3">
+            <aside className="rounded-sm border border-tactical-700 bg-tactical-900/70 p-3">
               <h2 className="font-mono text-xs uppercase tracking-widest text-tactical-200">Select Runs</h2>
               <p className="mt-2 text-sm text-slate-400">Choose 2+ completed runs to compare.</p>
 
@@ -1238,7 +1238,7 @@ function App() {
                 <input
                   value={compareManualId}
                   onChange={(e) => setCompareManualId(e.target.value)}
-                  className="w-full rounded border border-tactical-700 bg-tactical-950/40 px-3 py-2 text-sm"
+                  className="w-full rounded-sm border border-tactical-700 bg-tactical-950/40 px-3 py-2 text-sm"
                   placeholder="Add run id (optional)"
                   list="run-ids"
                 />
@@ -1250,7 +1250,7 @@ function App() {
                     setCompareSelectedIds((cur) => (cur.includes(id) ? cur : [...cur, id]));
                     setCompareManualId("");
                   }}
-                  className="rounded border border-tactical-700 bg-tactical-900/60 px-2 py-2 font-mono text-xs uppercase tracking-widest text-tactical-200 hover:border-tactical-500"
+                  className="rounded-sm border border-tactical-700 bg-tactical-900/60 px-2 py-2 font-mono text-xs uppercase tracking-widest text-tactical-200 hover:border-tactical-500"
                 >
                   Add
                 </button>
@@ -1261,7 +1261,7 @@ function App() {
                   type="button"
                   onClick={() => void onCompare()}
                   disabled={creatingRun || compareSelectedIds.length < 2}
-                  className="rounded border border-accent-amber bg-tactical-800/80 px-3 py-2 font-mono text-xs uppercase tracking-widest text-slate-100 disabled:opacity-50"
+                  className="rounded-sm border border-accent-amber bg-tactical-800/80 px-3 py-2 font-mono text-xs uppercase tracking-widest text-slate-100 disabled:opacity-50"
                 >
                   {creatingRun ? "Working..." : "Compare Selected"}
                 </button>
@@ -1271,7 +1271,7 @@ function App() {
                     setCompareSelectedIds([]);
                     setCompareResult(null);
                   }}
-                  className="rounded border border-tactical-700 bg-tactical-900/60 px-3 py-2 font-mono text-xs uppercase tracking-widest text-tactical-200 hover:border-tactical-500"
+                  className="rounded-sm border border-tactical-700 bg-tactical-900/60 px-3 py-2 font-mono text-xs uppercase tracking-widest text-tactical-200 hover:border-tactical-500"
                 >
                   Clear
                 </button>
@@ -1317,11 +1317,11 @@ function App() {
             </aside>
 
             <div className="space-y-4">
-              <section className="rounded border border-tactical-700 bg-tactical-900/60 p-4">
+              <section className="rounded-sm border border-tactical-700 bg-tactical-900/60 p-4">
                 <h3 className="font-mono text-xs uppercase tracking-[0.2em] text-tactical-200">Comparison</h3>
                 {compareResult ? (
                   <div className="mt-4 space-y-3">
-                    <div className="overflow-x-auto rounded border border-tactical-700 bg-black/30 p-3">
+                    <div className="overflow-x-auto rounded-sm border border-tactical-700 bg-black/30 p-3">
                       <table className="w-full min-w-[860px] border-collapse text-left text-sm">
                         <thead className="text-xs uppercase tracking-[0.2em] text-tactical-300">
                           <tr>
@@ -1371,7 +1371,7 @@ function App() {
                     </div>
 
                     {Array.isArray((compareResult as any)?.top_regressions) && ((compareResult as any).top_regressions as any[]).length > 0 ? (
-                      <section className="rounded border border-tactical-700 bg-black/30 p-3">
+                      <section className="rounded-sm border border-tactical-700 bg-black/30 p-3">
                         <h4 className="font-mono text-xs uppercase tracking-[0.2em] text-tactical-200">Top Regressions</h4>
                         <div className="mt-2 space-y-1 text-sm text-slate-200">
                           {((compareResult as any).top_regressions as any[]).slice(0, 8).map((r, idx) => (
@@ -1383,11 +1383,11 @@ function App() {
                       </section>
                     ) : null}
 
-                    <section className="rounded border border-tactical-700 bg-black/30 p-3">
+                    <section className="rounded-sm border border-tactical-700 bg-black/30 p-3">
                       <h4 className="font-mono text-xs uppercase tracking-[0.2em] text-tactical-200">Readiness Breakdown</h4>
                       <div className="mt-2 grid gap-2 md:grid-cols-2">
                         {compareBreakdown.selected.map((id) => (
-                          <div key={id} className="rounded border border-tactical-800 bg-black/20 p-2">
+                          <div key={id} className="rounded-sm border border-tactical-800 bg-black/20 p-2">
                             <p className="font-mono text-[11px] uppercase tracking-widest text-tactical-300">{id}</p>
                             <p className="mt-1 text-xs text-slate-400">
                               weighting_mode: {String(compareBreakdown.weightingModeByRun[id] ?? "n/a")}
@@ -1440,7 +1440,7 @@ function App() {
                       </div>
                     </section>
 
-                    <details className="rounded border border-tactical-700 bg-black/30 p-3">
+                    <details className="rounded-sm border border-tactical-700 bg-black/30 p-3">
                       <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.2em] text-tactical-200">
                         Raw Compare JSON
                       </summary>
